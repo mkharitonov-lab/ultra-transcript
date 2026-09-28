@@ -89,7 +89,8 @@ impl Engines {
             segmentation: OfflineSpeakerSegmentationModelConfig {
                 pyannote: OfflineSpeakerSegmentationPyannoteModelConfig {
                     model: p(models.join(SEGMENTATION_DIR).join("model.onnx")),
-                    ..Default::default()
+                    // Сдвиг окна 10% (по умолчанию) почти не улучшает разметку, но в 2–3 раза медленнее.
+                    window_shift_ratio: 0.25,
                 },
                 num_threads: threads(),
                 ..Default::default()
