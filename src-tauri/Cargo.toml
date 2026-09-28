@@ -1,0 +1,49 @@
+[package]
+name = "ultra-transcript"
+version = "0.1.0"
+description = "Расшифровка аудио и видео на русском"
+authors = ["mkharitonov-lab"]
+edition = "2021"
+default-run = "ultra-transcript"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "ultra_transcript_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sherpa-onnx = "1.13.8"
+anyhow = "1.0.104"
+regex = "1.13.1"
+zip = "8.6.0"
+uuid = { version = "1.26.1", features = ["v4"] }
+bzip2 = "0.6.1"
+tar = "0.4.46"
+dirs = "7.0.0"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+chrono = "0.4.45"
+tauri-plugin-dialog = "2.8.0"
+aes-gcm = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "multipart"] }
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+base64 = "0.23.1"
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
