@@ -2,8 +2,67 @@
 
 use crate::media::SAMPLE_RATE;
 use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
 use sherpa_onnx::*;
 use std::path::Path;
+
+/// Модель распознавания речи.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AsrModel {
+    /// GigaAM v3 (Сбер) с пунктуацией: для русского точнее и быстрее.
+    #[default]
+    Gigaam,
+    /// Whisper large-v3-turbo (OpenAI): многоязычная.
+    WhisperTurbo,
+}
+
+impl AsrModel {
+    pub fn dir(self) -> &'static str {
+        match self {
+            Self::Gigaam => "sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16",
+            Self::WhisperTurbo => "sherpa-onnx-whisper-turbo",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Gigaam => "GigaAM v3",
+            Self::WhisperTurbo => "Whisper large-v3-turbo",
+        }
+    }
+
+    fn config(self, models: &Path) -> OfflineRecognizerConfig {
+        let dir = models.join(self.dir());
+        let mut rc = OfflineRecognizerConfig::default();
+        match self {
+            Self::Gigaam => {
+                rc.model_config.transducer = OfflineTransducerModelConfig {
+                    encoder: p(dir.join("encoder.int8.onnx")),
+                    decoder: p(dir.join("decoder.onnx")),
+                    joiner: p(dir.join("joiner.onnx")),
+                };
+                rc.model_config.tokens = p(dir.join("tokens.txt"));
+                rc.model_config.model_type = Some("nemo_transducer".into());
+            }
+            Self::WhisperTurbo => {
+                rc.model_config.whisper = OfflineWhisperModelConfig {
+                    encoder: p(dir.join("turbo-encoder.int8.onnx")),
+                    decoder: p(dir.join("turbo-decoder.int8.onnx")),
+                    language: Some("ru".into()),
+                    task: Some("transcribe".into()),
+                    tail_paddings: 0,
+                    enable_token_timestamps: false,
+                    enable_segment_timestamps: false,
+                };
+                rc.model_config.tokens = p(dir.join("turbo-tokens.txt"));
+            }
+        }
+        rc.model_config.num_threads = threads();
+        rc.decoding_method = Some("greedy_search".into());
+        rc
+    }
+}
 
 pub struct Word {
     pub text: String,
@@ -27,13 +86,13 @@ pub struct Turn {
 }
 
 pub struct Engines {
+    pub asr: AsrModel,
     recognizer: OfflineRecognizer,
     vad: VadModelConfig,
     diarizer: OfflineSpeakerDiarization,
     embedder: SpeakerEmbeddingExtractor,
 }
 
-pub const ASR_DIR: &str = "sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16";
 pub const VAD_FILE: &str = "silero_vad.onnx";
 pub const SEGMENTATION_DIR: &str = "sherpa-onnx-pyannote-segmentation-3-0";
 pub const EMBEDDING_FILE: &str = "wespeaker_en_voxceleb_resnet34_LM.onnx";
@@ -49,20 +108,9 @@ fn threads() -> i32 {
 }
 
 impl Engines {
-    pub fn load(models: &Path, cluster_threshold: f32) -> Result<Self> {
-        let asr = models.join(ASR_DIR);
-        let mut rc = OfflineRecognizerConfig::default();
-        rc.model_config.transducer = OfflineTransducerModelConfig {
-            encoder: p(asr.join("encoder.int8.onnx")),
-            decoder: p(asr.join("decoder.onnx")),
-            joiner: p(asr.join("joiner.onnx")),
-        };
-        rc.model_config.tokens = p(asr.join("tokens.txt"));
-        rc.model_config.model_type = Some("nemo_transducer".into());
-        rc.model_config.num_threads = threads();
-        rc.decoding_method = Some("greedy_search".into());
-        let recognizer = OfflineRecognizer::create(&rc)
-            .ok_or_else(|| anyhow!("не удалось загрузить модель распознавания"))?;
+    pub fn load(models: &Path, asr: AsrModel, cluster_threshold: f32) -> Result<Self> {
+        let recognizer = OfflineRecognizer::create(&asr.config(models))
+            .ok_or_else(|| anyhow!("не удалось загрузить модель распознавания {}", asr.title()))?;
 
         let vad = VadModelConfig {
             silero_vad: SileroVadModelConfig {
@@ -109,7 +157,7 @@ impl Engines {
         let embedder = SpeakerEmbeddingExtractor::create(&embedding)
             .ok_or_else(|| anyhow!("не удалось загрузить модель голосовых эмбеддингов"))?;
 
-        Ok(Self { recognizer, vad, diarizer, embedder })
+        Ok(Self { asr, recognizer, vad, diarizer, embedder })
     }
 
     /// Режет запись на фрагменты речи по паузам.
@@ -157,7 +205,10 @@ impl Engines {
                 let end = offset + s.len() as f32 / SAMPLE_RATE as f32;
                 let words = st
                     .get_result()
-                    .map(|r| tokens_to_words(&r.tokens, r.timestamps.as_deref(), offset, end))
+                    .map(|r| match self.asr {
+                        AsrModel::Gigaam => tokens_to_words(&r.tokens, r.timestamps.as_deref(), offset, end),
+                        AsrModel::WhisperTurbo => text_to_words(&r.text, offset, end),
+                    })
                     .unwrap_or_default();
                 segments.push(Segment { start: offset, end, words });
             }
@@ -200,6 +251,37 @@ pub fn normalize(v: &mut [f32]) {
 
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+/// Whisper не даёт надёжных таймкодов слов: распределяем слова по фрагменту
+/// пропорционально длине. Фрагменты короткие (≤ 20 с), для разметки спикеров этого хватает.
+fn text_to_words(text: &str, offset: f32, end: f32) -> Vec<Word> {
+    if is_hallucination(text) {
+        return vec![];
+    }
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    let total = parts.iter().map(|w| w.chars().count() + 1).sum::<usize>().max(1) as f32;
+    let mut pos = 0usize;
+    parts
+        .iter()
+        .map(|w| {
+            let len = w.chars().count() + 1;
+            let a = offset + (end - offset) * pos as f32 / total;
+            pos += len;
+            Word { text: w.to_string(), start: a, end: offset + (end - offset) * pos as f32 / total }
+        })
+        .collect()
+}
+
+/// Известные «галлюцинации» Whisper на русском — фразы из субтитров обучающих данных,
+/// которые модель выдаёт на тишине и шуме.
+fn is_hallucination(text: &str) -> bool {
+    const PHRASES: &[&str] = &[
+        "субтитры", "продолжение следует", "спасибо за просмотр", "редактор субтитров",
+        "корректор", "подписывайтесь на канал", "ставьте лайк",
+    ];
+    let t = text.trim().to_lowercase();
+    t.is_empty() || (t.chars().count() < 80 && PHRASES.iter().any(|p| t.contains(p)))
 }
 
 /// Токены SentencePiece ("▁" = начало слова) → слова с таймкодами.

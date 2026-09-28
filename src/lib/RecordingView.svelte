@@ -2,8 +2,8 @@
   import { onMount, tick } from "svelte";
   import Icon from "./Icon.svelte";
   import {
-    api, audioUrl, fmtTime, recordingDir, showError, speakerColor,
-    type AppInfo, type Person, type Recording, type Transcript,
+    api, audioUrl, confirmDialog, fmtTime, recordingDir, showError, speakerColor,
+    type AppInfo, type AsrModel, type Person, type Recording, type Transcript,
   } from "./api";
 
   let {
@@ -25,6 +25,17 @@
   let rate = $state(1);
   let follow = $state(true);
   let list = $state<HTMLElement>();
+  let redoMenu = $state(false);
+
+  const asrOptions: [AsrModel, string][] = [["gigaam", "GigaAM v3"], ["whisper-turbo", "Whisper large-v3-turbo"]];
+  const installed = (id: AsrModel) => info.models.some((m) => m.asr === id && m.installed);
+
+  async function redo(asr: AsrModel) {
+    redoMenu = false;
+    if (t && !(await confirmDialog("Расшифровать запись заново? Ручные правки текста и протокол будут заменены."))) return;
+    await api.retry(recording.id, asr).catch(showError);
+    onchange();
+  }
 
   const dir = $derived(recordingDir(info.data_dir, recording.id));
   const active = $derived(t ? t.utterances.findLastIndex((u) => u.start <= time + 0.05) : -1);
@@ -147,12 +158,26 @@
           <button class="ghost" title="Открыть .docx" onclick={() => api.reveal(`${dir}/${tab === "protocol" && t?.protocol ? "protocol" : "transcript"}.docx`, true)}><Icon name="doc" /></button>
           <button class="ghost" title="Показать файлы" onclick={() => api.reveal(`${dir}/transcript.docx`)}><Icon name="reveal" /></button>
         {/if}
+        <div class="redo">
+          <button class="ghost" title="Расшифровать заново" onclick={() => (redoMenu = !redoMenu)}
+            disabled={recording.status === "processing" || recording.status === "queued"}><Icon name="refresh" /></button>
+          {#if redoMenu}
+            <div class="menu">
+              <div class="menu-title faint">Расшифровать заново моделью</div>
+              {#each asrOptions as [id, name]}
+                <button onclick={() => redo(id)} disabled={!installed(id)}>
+                  {name}{#if t?.asr_model === name}<span class="faint"> · текущая</span>{/if}{#if !installed(id)}<span class="faint"> · не скачана</span>{/if}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
         <button class="ghost danger" title="Удалить" onclick={onremove}><Icon name="trash" /></button>
       </div>
     </div>
     <div class="meta muted">
       {recording.created_at} · {fmtTime(t?.duration ?? recording.duration)}
-      {#if t} · {t.speakers.length} {t.speakers.length === 1 ? "спикер" : "спикера"}{/if}
+      {#if t} · {t.speakers.length} {t.speakers.length === 1 ? "спикер" : "спикера"}{#if t.asr_model} · {t.asr_model}{/if}{/if}
       · <span class="src" title={recording.source}>{recording.source.split(/[\\/]/).pop()}</span>
     </div>
 
@@ -202,6 +227,12 @@
     {/if}
   </header>
 
+  {#if recording.status === "queued" && t}
+    <div class="banner"><Icon name="clock" /> В очереди на расшифровку</div>
+  {/if}
+  {#if recording.status === "error" && t}
+    <div class="banner warn" title={recording.error}><Icon name="alert" /> {recording.error}</div>
+  {/if}
   {#if recording.status === "processing" && t}
     <div class="banner">
       <span class="spinner"></span>{progress?.stage || "Обработка"}{progress && progress.progress > 0 ? ` · ${Math.round(progress.progress * 100)}%` : ""}
@@ -304,6 +335,11 @@
   .head-row { display: flex; align-items: center; gap: 12px; }
   .title, .title-static { flex: 1; font-size: 20px; font-weight: 650; border: none !important; background: transparent !important; padding: 2px 0 !important; box-shadow: none !important; margin: 0; }
   .actions { display: flex; align-items: center; gap: 4px; }
+  .redo { position: relative; }
+  .menu { position: absolute; right: 0; top: 32px; width: 270px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 6px; z-index: 20; display: flex; flex-direction: column; }
+  .menu-title { font-size: 11px; padding: 4px 8px; }
+  .menu button { border: none; background: transparent; text-align: left; padding: 6px 8px; border-radius: 6px; }
+  .menu button:hover:not(:disabled) { background: var(--bg-selected); }
   .meta { margin-top: 2px; font-size: 12px; }
   .src { font-family: ui-monospace, monospace; font-size: 11px; }
   .seg { display: inline-flex; background: var(--bg-hover); border-radius: 7px; padding: 2px; margin-right: 6px; }

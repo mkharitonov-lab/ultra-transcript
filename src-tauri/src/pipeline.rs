@@ -45,6 +45,7 @@ pub fn transcribe(
         source: input.to_string_lossy().into_owned(),
         created_at: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
         duration,
+        asr_model: engines.asr.title().to_string(),
         speakers: vec![],
         utterances,
         protocol: None,

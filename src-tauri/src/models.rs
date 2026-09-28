@@ -1,6 +1,6 @@
 //! Каталог моделей: скачиваются внутри приложения при первом запуске.
 
-use crate::speech;
+use crate::speech::{self, AsrModel};
 use anyhow::{bail, Result};
 use serde::Serialize;
 use std::io::{Read, Write};
@@ -11,6 +11,8 @@ const BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download";
 #[derive(Clone, Serialize)]
 pub struct Model {
     pub name: &'static str,
+    /// Модель распознавания — нужна только выбранная; остальные — обязательные.
+    pub asr: Option<AsrModel>,
     pub title: &'static str,
     pub url: String,
     /// Что должно появиться в каталоге моделей после установки.
@@ -22,15 +24,20 @@ pub struct Model {
 pub fn catalog(dir: &Path) -> Vec<Model> {
     let m = |name, title, url: String, target, size_mb| Model {
         name,
+        asr: None,
         title,
         installed: dir.join(target).exists(),
         url,
         target,
         size_mb,
     };
+    let asr = |name, a: AsrModel, title, size_mb| Model {
+        asr: Some(a),
+        ..m(name, title, format!("{BASE}/asr-models/{}.tar.bz2", a.dir()), a.dir(), size_mb)
+    };
     vec![
-        m("asr", "GigaAM v3 — распознавание русской речи с пунктуацией",
-          format!("{BASE}/asr-models/{}.tar.bz2", speech::ASR_DIR), speech::ASR_DIR, 170),
+        asr("gigaam", AsrModel::Gigaam, "GigaAM v3 — русская речь с пунктуацией", 170),
+        asr("whisper-turbo", AsrModel::WhisperTurbo, "Whisper large-v3-turbo — многоязычная", 563),
         m("vad", "Silero VAD — поиск речи",
           format!("{BASE}/asr-models/{}", speech::VAD_FILE), speech::VAD_FILE, 1),
         m("segmentation", "Pyannote 3.0 — сегментация по спикерам",
@@ -41,8 +48,13 @@ pub fn catalog(dir: &Path) -> Vec<Model> {
     ]
 }
 
-pub fn all_installed(dir: &Path) -> bool {
-    catalog(dir).iter().all(|m| m.installed)
+/// Модели, без которых нельзя расшифровать выбранной моделью распознавания.
+pub fn required(dir: &Path, asr: AsrModel) -> Vec<Model> {
+    catalog(dir).into_iter().filter(|m| m.asr.is_none_or(|a| a == asr)).collect()
+}
+
+pub fn ready(dir: &Path, asr: AsrModel) -> bool {
+    required(dir, asr).iter().all(|m| m.installed)
 }
 
 /// Скачивает модель; архивы .tar.bz2 распаковываются. `progress` — доля 0..1.

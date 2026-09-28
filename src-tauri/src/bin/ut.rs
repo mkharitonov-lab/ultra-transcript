@@ -1,20 +1,24 @@
-//! CLI для проверки конвейера без интерфейса: `ut <файл> [--protocol]`.
+//! CLI для проверки конвейера без интерфейса: `ut <файл> [--protocol] [--whisper]`.
 
 use std::sync::{mpsc, Arc};
-use ultra_transcript_lib::{models, pipeline, service::{Job, Service}, store::Store};
+use ultra_transcript_lib::{models, pipeline, service::{Job, Service}, speech::AsrModel, store::Store};
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let file = args.iter().find(|a| !a.starts_with("--")).expect("использование: ut <файл> [--protocol]");
+    let file = args.iter().find(|a| !a.starts_with("--")).expect("использование: ut <файл> [--protocol] [--whisper]");
     let store = Arc::new(Store::open()?);
     pipeline::ensure_templates(&store)?;
-    for m in models::catalog(&store.models_dir()).into_iter().filter(|m| !m.installed) {
+    let asr = if args.iter().any(|a| a == "--whisper") { AsrModel::WhisperTurbo } else { AsrModel::Gigaam };
+    for m in models::required(&store.models_dir(), asr).into_iter().filter(|m| !m.installed) {
         eprintln!("скачиваю {}", m.title);
         models::install(&store.models_dir(), &m, &|_| {})?;
     }
     let (tx, rx) = mpsc::channel();
     let svc = Service::start(store.clone(), Arc::new(move |e| { let _ = tx.send(e); }), false);
     let t0 = std::time::Instant::now();
+    let mut settings = store.settings();
+    settings.asr_model = asr;
+    store.save_settings(&settings)?;
     let id = svc.import(std::fs::canonicalize(file)?, None)?;
     let mut protocol_requested = !args.iter().any(|a| a == "--protocol");
     let mut last = String::new();

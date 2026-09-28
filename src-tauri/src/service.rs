@@ -2,7 +2,7 @@
 //! используется и приложением, и CLI.
 
 use crate::pipeline;
-use crate::speech::Engines;
+use crate::speech::{AsrModel, Engines};
 use crate::store::{Recording, Store};
 use crate::{media, models};
 use anyhow::{anyhow, Result};
@@ -26,7 +26,8 @@ pub struct Event {
 pub type Emit = Arc<dyn Fn(Event) + Send + Sync>;
 
 pub enum Job {
-    Transcribe { id: String, input: PathBuf },
+    /// `asr` — модель распознавания для этой записи; None — из настроек.
+    Transcribe { id: String, input: PathBuf, asr: Option<AsrModel> },
     Protocol { id: String },
     Export { id: String },
 }
@@ -44,7 +45,7 @@ impl Service {
 
         let worker = svc.clone();
         std::thread::spawn(move || {
-            let mut engines: Option<(f32, Engines)> = None;
+            let mut engines: Option<(f32, Engines)> = None; // (порог кластеризации, модели)
             for job in rx {
                 worker.run(job, &mut engines);
             }
@@ -53,7 +54,7 @@ impl Service {
         // Прерванные задачи (приложение закрыли во время обработки) — снова в очередь.
         for r in store.recordings().unwrap_or_default() {
             if r.status == "queued" || r.status == "processing" {
-                svc.send(Job::Transcribe { id: r.id, input: PathBuf::from(r.source) });
+                svc.send(Job::Transcribe { id: r.id, input: PathBuf::from(r.source), asr: None });
             }
         }
         if watch {
@@ -92,7 +93,7 @@ impl Service {
             rule_id,
         })?;
         self.notify(&id, "queued", "", 0.0, "");
-        self.send(Job::Transcribe { id: id.clone(), input });
+        self.send(Job::Transcribe { id: id.clone(), input, asr: None });
         Ok(id)
     }
 
@@ -133,15 +134,18 @@ impl Service {
         let store = &self.store;
         let mut warnings = vec![];
         let (id, mut t) = match job {
-            Job::Transcribe { id, input } => {
-                let threshold = store.settings().cluster_threshold;
-                if engines.as_ref().is_none_or(|(th, _)| *th != threshold) {
+            Job::Transcribe { id, input, asr } => {
+                let settings = store.settings();
+                let (threshold, asr) = (settings.cluster_threshold, asr.unwrap_or(settings.asr_model));
+                if engines.as_ref().is_none_or(|(th, e)| *th != threshold || e.asr != asr) {
                     anyhow::ensure!(
-                        models::all_installed(&store.models_dir()),
-                        "модели не установлены — откройте «Настройки → Модели»"
+                        models::ready(&store.models_dir(), asr),
+                        "модель {} не установлена — откройте «Настройки»",
+                        asr.title()
                     );
                     self.notify(&id, "processing", "Загрузка моделей", 0.0, "");
-                    *engines = Some((threshold, Engines::load(&store.models_dir(), threshold)?));
+                    *engines = None; // освободить память до загрузки новых моделей
+                    *engines = Some((threshold, Engines::load(&store.models_dir(), asr, threshold)?));
                 }
                 let eng = &engines.as_ref().unwrap().1;
                 let progress = |stage: &str, p: f32| self.notify(&id, "processing", stage, p, "");

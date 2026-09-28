@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type AppInfo } from "./api";
+  import { api, type AppInfo, type AsrModel } from "./api";
 
-  let { info, onmodels }: { info: AppInfo; onmodels: () => void } = $props();
+  let { info, onmodels, asr = "gigaam" }: { info: AppInfo; onmodels: () => void; asr?: AsrModel } = $props();
   let progress = $state<Record<string, number>>({});
   let error = $state("");
   let busy = $state(false);
 
-  const missing = $derived(info.models.filter((m) => !m.installed));
+  // Нужны все служебные модели и только выбранная модель распознавания.
+  const models = $derived(info.models.filter((m) => !m.asr || m.asr === asr));
+  const missing = $derived(models.filter((m) => !m.installed));
   const totalMb = $derived(missing.reduce((a, m) => a + m.size_mb, 0));
 
   onMount(() => {
@@ -29,7 +31,7 @@
 
 <div class="card">
   <h2>Модели</h2>
-  {#each info.models as m}
+  {#each models as m}
     <div class="row">
       <span class="dot" class:ok={m.installed}></span>
       <span class="title">{m.title}</span>

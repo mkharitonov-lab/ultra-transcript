@@ -12,6 +12,7 @@ use serde::Serialize;
 use service::{Job, Service};
 use std::path::PathBuf;
 use std::sync::Arc;
+use speech::AsrModel;
 use store::{Person, Recording, Rule, Settings, Store, Suggestion, Term};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -48,11 +49,14 @@ struct ModelProgress {
     error: String,
 }
 
+/// Скачивает указанные модели; без списка — недостающие для выбранной модели распознавания.
 #[tauri::command]
-fn install_models(app: AppHandle, svc: Svc) {
+fn install_models(app: AppHandle, svc: Svc, names: Vec<String>) {
     let dir = svc.store.models_dir();
+    let asr = svc.store.settings().asr_model;
     std::thread::spawn(move || {
-        for m in models::catalog(&dir).into_iter().filter(|m| !m.installed) {
+        let wanted = |m: &models::Model| if names.is_empty() { m.asr.is_none_or(|a| a == asr) } else { names.iter().any(|n| n == m.name) };
+        for m in models::catalog(&dir).into_iter().filter(|m| !m.installed && wanted(m)) {
             let emit = |p: f32, err: String| {
                 let _ = app.emit("models", ModelProgress { name: m.name.into(), progress: p, error: err });
             };
@@ -76,11 +80,12 @@ fn import_files(svc: Svc, paths: Vec<String>) -> R<Vec<String>> {
     paths.into_iter().map(|p| svc.import(PathBuf::from(p), None).map_err(e)).collect()
 }
 
+/// Расшифровать заново — моделью из настроек или указанной.
 #[tauri::command]
-fn retry(svc: Svc, id: String) -> R<()> {
+fn retry(svc: Svc, id: String, asr: Option<AsrModel>) -> R<()> {
     let r = svc.store.recording(&id).map_err(e)?;
     svc.store.set_status(&id, "queued", "").map_err(e)?;
-    svc.enqueue(Job::Transcribe { id, input: PathBuf::from(r.source) });
+    svc.enqueue(Job::Transcribe { id, input: PathBuf::from(r.source), asr });
     Ok(())
 }
 

@@ -13,7 +13,7 @@
 UI (Svelte, src/) ──invoke/events──► Ядро (Rust, src-tauri/src/)
                                        service.rs   очередь задач, фоновый обработчик, опрос папок
                                        pipeline.rs  Ingest → ASR → Diarize → Identify → Correct → Enrich → Export
-                                       speech.rs    sherpa-onnx: GigaAM v3, Silero VAD, pyannote, WeSpeaker
+                                       speech.rs    sherpa-onnx: GigaAM v3 | Whisper large-v3-turbo, Silero VAD, pyannote, WeSpeaker
                                        llm.rs       OpenAI-совместимый чат (локально или API)
                                        docx.rs      движок .docx-шаблонов
                                        store.rs     SQLite + голосовые отпечатки (AES-256-GCM)
@@ -24,7 +24,11 @@ UI (Svelte, src/) ──invoke/events──► Ядро (Rust, src-tauri/src/)
 - Шаблоны .docx редактируются в Word. Метки: `{{поле}}`; `{{список}}` в пункте списка повторяется для каждого
   элемента; `{{таблица.колонка}}` в строке таблицы повторяет строку. **Набор меток шаблона = схема для LLM**:
   добавили в шаблон `{{риски}}` — LLM заполнит и это поле.
-- Модели (~205 МБ) скачиваются внутри приложения при первом запуске.
+- Модели скачиваются внутри приложения при первом запуске (~205 МБ с GigaAM).
+- Модель распознавания выбирается в настройках, а для отдельной записи — через «Расшифровать заново»:
+  - **GigaAM v3** (по умолчанию) — для русского точнее и примерно в 7 раз быстрее, сама ставит пунктуацию;
+  - **Whisper large-v3-turbo** (+563 МБ) — многоязычная; таймкоды слов оцениваются внутри фрагмента,
+    известные «галлюцинации» на тишине («Субтитры сделал…») отбрасываются.
 
 ## Запуск
 
@@ -39,7 +43,7 @@ pnpm tauri build --bundles app      # сборка .app
 Проверка конвейера без интерфейса:
 
 ```bash
-cd src-tauri && cargo run --release --bin ut -- запись.m4a [--protocol]
+cd src-tauri && cargo run --release --bin ut -- запись.m4a [--protocol] [--whisper]
 ```
 
 Данные: `~/Library/Application Support/app.ultratranscript/` (библиотека, модели, шаблоны).

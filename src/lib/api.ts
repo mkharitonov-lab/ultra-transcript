@@ -9,8 +9,9 @@ export type Recording = {
 };
 export type Speaker = { id: string; name: string; person_id: number | null; similarity: number | null };
 export type Utterance = { id: number; speaker: string; start: number; end: number; raw: string; text: string; clean: string };
+export type AsrModel = "gigaam" | "whisper-turbo";
 export type Transcript = {
-  id: string; title: string; source: string; created_at: string; duration: number;
+  id: string; title: string; source: string; created_at: string; duration: number; asr_model: string;
   speakers: Speaker[]; utterances: Utterance[]; protocol?: Record<string, unknown> | null;
 };
 export type Term = { id: number | null; term: string; aliases: string; definition: string };
@@ -21,21 +22,21 @@ export type Rule = {
   protocol_dir: string; protocol: boolean; enabled: boolean;
 };
 export type Settings = {
-  llm_enabled: boolean; llm_base_url: string; llm_model: string; llm_api_key: string;
+  asr_model: AsrModel; llm_enabled: boolean; llm_base_url: string; llm_model: string; llm_api_key: string;
   cluster_threshold: number; voice_threshold: number; archive_kbps: number;
   auto_accept_suggestions: boolean; transcript_template: string; protocol_template: string;
 };
-export type Model = { name: string; title: string; size_mb: number; installed: boolean };
+export type Model = { name: string; asr: AsrModel | null; title: string; size_mb: number; installed: boolean };
 export type AppInfo = { data_dir: string; templates_dir: string; models: Model[] };
 export type JobEvent = { recording_id: string; status: Recording["status"]; stage: string; progress: number; message: string };
 export type ModelEvent = { name: string; progress: number; error: string };
 
 export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
-  installModels: () => invoke<void>("install_models"),
+  installModels: (names: string[] = []) => invoke<void>("install_models", { names }),
   recordings: () => invoke<Recording[]>("list_recordings"),
   importFiles: (paths: string[]) => invoke<string[]>("import_files", { paths }),
-  retry: (id: string) => invoke<void>("retry", { id }),
+  retry: (id: string, asr: AsrModel | null = null) => invoke<void>("retry", { id, asr }),
   deleteRecording: (id: string) => invoke<void>("delete_recording", { id }),
   transcript: (id: string) => invoke<Transcript>("get_transcript", { id }),
   saveTranscript: (transcript: Transcript) => invoke<void>("save_transcript", { transcript }),

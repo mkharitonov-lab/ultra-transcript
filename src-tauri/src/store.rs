@@ -1,6 +1,7 @@
 //! Локальное хранилище: библиотека, словарь, «кто есть кто», голосовые отпечатки
 //! (зашифрованы), предложения, правила папок, настройки.
 
+use crate::speech::AsrModel;
 use crate::transcript::Transcript;
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
@@ -20,6 +21,7 @@ pub fn data_dir() -> PathBuf {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub asr_model: AsrModel,
     pub llm_enabled: bool,
     pub llm_base_url: String,
     pub llm_model: String,
@@ -36,6 +38,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            asr_model: AsrModel::default(),
             llm_enabled: false,
             llm_base_url: "http://localhost:11434/v1".into(),
             llm_model: "qwen3:8b".into(),

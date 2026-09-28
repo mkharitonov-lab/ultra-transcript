@@ -10,6 +10,9 @@ pub struct Transcript {
     pub source: String,
     pub created_at: String,
     pub duration: f32,
+    /// Какой моделью распознано.
+    #[serde(default)]
+    pub asr_model: String,
     pub speakers: Vec<Speaker>,
     pub utterances: Vec<Utterance>,
     /// Заполненные поля шаблона протокола (ключи = плейсхолдеры шаблона).

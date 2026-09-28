@@ -3,14 +3,35 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import Page from "./Page.svelte";
   import ModelsCard from "./ModelsCard.svelte";
-  import { api, showError, type AppInfo, type Settings } from "./api";
+  import { api, showError, type AppInfo, type AsrModel, type Settings } from "./api";
 
   let { info, onmodels }: { info: AppInfo; onmodels: () => void } = $props();
   let s = $state<Settings | null>(null);
   let test = $state("");
   let saved = $state(false);
+  let downloading = $state<Record<string, number>>({});
 
-  onMount(async () => (s = await api.settings()));
+  const asrModels: { id: AsrModel; name: string; about: string }[] = [
+    { id: "gigaam", name: "GigaAM v3", about: "Сбер. Лучший выбор для русского: точнее и в несколько раз быстрее, сама расставляет пунктуацию и пишет числа цифрами." },
+    { id: "whisper-turbo", name: "Whisper large-v3-turbo", about: "OpenAI. Многоязычная — для записей с английским и другими языками. Медленнее, иногда «додумывает» текст на шуме." },
+  ];
+  const modelFor = (id: AsrModel) => info.models.find((m) => m.asr === id);
+
+  onMount(() => {
+    api.settings().then((v) => (s = v));
+    const un = api.onModels((e) => {
+      if (!(e.name in downloading)) return;
+      if (e.error) { showError(e.error); delete downloading[e.name]; return; }
+      downloading[e.name] = e.progress;
+      if (e.progress >= 1) { delete downloading[e.name]; onmodels(); }
+    });
+    return () => { un.then((f) => f()); };
+  });
+
+  function download(name: string) {
+    downloading[name] = 0;
+    api.installModels([name]);
+  }
 
   async function save() {
     if (!s) return;
@@ -40,6 +61,32 @@
 <Page title="Настройки">
   {#snippet actions()}{#if saved}<span class="muted">Сохранено</span>{/if}{/snippet}
   {#if s}
+    <section>
+      <h2>Распознавание речи</h2>
+      <div class="asr">
+        {#each asrModels as a}
+          {@const m = modelFor(a.id)}
+          <label class="asr-card" class:on={s.asr_model === a.id}>
+            <input type="radio" name="asr" value={a.id} bind:group={s.asr_model} onchange={save} />
+            <div class="asr-body">
+              <div class="asr-name">{a.name}
+                {#if m?.installed}<span class="ok">установлена</span>{/if}
+              </div>
+              <div class="muted">{a.about}</div>
+              {#if m && !m.installed}
+                {#if m.name in downloading}
+                  <div class="bar"><span style="width:{Math.round(downloading[m.name] * 100)}%"></span></div>
+                {:else}
+                  <button onclick={(e) => { e.preventDefault(); download(m.name); }}>Скачать · {m.size_mb} МБ</button>
+                {/if}
+              {/if}
+            </div>
+          </label>
+        {/each}
+      </div>
+      <p class="faint small">Модель применяется к новым записям. Любую запись можно расшифровать заново другой моделью — кнопка ↻ в заголовке записи.</p>
+    </section>
+
     <section>
       <h2>Языковая модель (LLM)</h2>
       <p class="muted desc">Исправляет термины и ФИО по справочникам, убирает слова-паразиты, пополняет справочники и составляет протоколы. Локальная (Ollama, LM Studio) или любой OpenAI-совместимый endpoint.</p>
@@ -88,7 +135,7 @@
     </section>
 
     <section>
-      <ModelsCard {info} {onmodels} />
+      <ModelsCard {info} {onmodels} asr={s.asr_model} />
       <p class="faint small">Данные: <button class="link" onclick={() => api.reveal(info.data_dir, true)}>{info.data_dir}</button></p>
     </section>
   {/if}
@@ -96,6 +143,15 @@
 
 <style>
   section { max-width: 760px; margin-bottom: 28px; }
+  .asr { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+  .asr-card { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--bg-card); }
+  .asr-card.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--bg-selected); }
+  .asr-card input { margin-top: 3px; accent-color: var(--accent); }
+  .asr-body { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; font-size: 12.5px; }
+  .asr-name { font-weight: 600; font-size: 13px; display: flex; gap: 8px; align-items: center; }
+  .ok { font-weight: 400; font-size: 11px; color: var(--ok); }
+  .bar { width: 100%; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+  .bar span { display: block; height: 100%; background: var(--accent); transition: width 0.2s; }
   .desc { margin: -4px 0 10px; }
   .check { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
   .presets { display: flex; gap: 4px; margin: 4px 0 8px; }
