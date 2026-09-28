@@ -1,21 +1,33 @@
+#[cfg(target_os = "macos")]
+mod appmenu;
+pub mod audio;
+pub mod diar;
 pub mod docx;
+pub mod exchange;
+pub mod lang;
 pub mod llm;
+pub mod local_llm;
+pub mod markdown;
 pub mod media;
 pub mod models;
+mod notify;
 pub mod pipeline;
 pub mod service;
 pub mod speech;
 pub mod store;
 pub mod transcript;
+mod tray;
+pub mod voices;
 
+use exchange::Directory;
+use lang::{tr, Language};
+use pipeline::{Doc, Format};
 use serde::Serialize;
-use service::{Job, Service};
-use std::path::PathBuf;
+use service::{Job, Service, Signal};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use speech::AsrModel;
-use store::{Person, Recording, Rule, Settings, Store, Suggestion, Term};
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
+use store::{Folder, LlmProvider, Pending, Person, Recording, Rule, Settings, Stats, Store, Term};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use transcript::Transcript;
 
@@ -28,17 +40,37 @@ fn e(err: impl std::fmt::Display) -> String {
 
 #[derive(Serialize)]
 struct AppInfo {
+    version: String,
     data_dir: String,
     templates_dir: String,
+    /// Каталог моделей; у нужных при текущих настройках — отметка `required`.
     models: Vec<models::Model>,
+    /// Собрана ли библиотека NeMo-Speech.cpp для Nemotron 3.
+    nemotron_runtime: bool,
+    /// Язык системы ("ru" | "en"), если его удалось узнать.
+    system_language: Option<&'static str>,
 }
 
 #[tauri::command]
-fn app_info(svc: Svc) -> AppInfo {
+fn app_info(app: AppHandle, svc: Svc) -> AppInfo {
+    let settings = svc.store.settings();
     AppInfo {
+        version: app.package_info().version.to_string(),
         data_dir: svc.store.dir.to_string_lossy().into(),
         templates_dir: pipeline::templates_dir(&svc.store).to_string_lossy().into(),
-        models: models::catalog(&svc.store.models_dir()),
+        models: models::with_required(&svc.store.models_dir(), settings.asr_model, settings.diar_model),
+        nemotron_runtime: diar::nemotron::library_path().is_some(),
+        system_language: lang::system(),
+    }
+}
+
+/// Тексты лицензии приложения и сведений о сторонних компонентах — они вшиты в программу.
+#[tauri::command]
+fn legal(kind: String) -> R<&'static str> {
+    match kind.as_str() {
+        "license" => Ok(include_str!("../../LICENSE")),
+        "notices" => Ok(include_str!("../../THIRD_PARTY_NOTICES.md")),
+        _ => Err(format!("legal: {kind}")),
     }
 }
 
@@ -49,18 +81,22 @@ struct ModelProgress {
     error: String,
 }
 
-/// Скачивает указанные модели; без списка — недостающие для выбранной модели распознавания.
+/// Скачивает указанные модели; без списка — недостающие для выбранных моделей распознавания
+/// и диаризации и шумоподавление.
 #[tauri::command]
 fn install_models(app: AppHandle, svc: Svc, names: Vec<String>) {
     let dir = svc.store.models_dir();
-    let asr = svc.store.settings().asr_model;
+    let settings = svc.store.settings();
+    let (asr, diar) = (settings.asr_model, settings.diar_model);
     std::thread::spawn(move || {
-        let wanted = |m: &models::Model| if names.is_empty() { m.asr.is_none_or(|a| a == asr) } else { names.iter().any(|n| n == m.name) };
+        let wanted = |m: &models::Model| {
+            if names.is_empty() { m.needed_for(asr, diar) || m.kind == "denoise" } else { names.iter().any(|n| n == m.name) }
+        };
         for m in models::catalog(&dir).into_iter().filter(|m| !m.installed && wanted(m)) {
             let emit = |p: f32, err: String| {
                 let _ = app.emit("models", ModelProgress { name: m.name.into(), progress: p, error: err });
             };
-            match models::install(&dir, &m, &|p| emit(p, String::new())) {
+            match models::install(&dir, &m, &|p| emit(p.min(0.999), String::new())) {
                 Ok(()) => emit(1.0, String::new()),
                 Err(err) => return emit(0.0, e(err)),
             }
@@ -82,10 +118,10 @@ fn import_files(svc: Svc, paths: Vec<String>) -> R<Vec<String>> {
 
 /// Расшифровать заново — моделью из настроек или указанной.
 #[tauri::command]
-fn retry(svc: Svc, id: String, asr: Option<AsrModel>) -> R<()> {
+fn retry(svc: Svc, id: String, asr: Option<AsrModel>, diar: Option<diar::DiarModel>) -> R<()> {
     let r = svc.store.recording(&id).map_err(e)?;
     svc.store.set_status(&id, "queued", "").map_err(e)?;
-    svc.enqueue(Job::Transcribe { id, input: PathBuf::from(r.source), asr });
+    svc.enqueue(Job::Transcribe { id, input: PathBuf::from(r.source), asr, diar });
     Ok(())
 }
 
@@ -95,8 +131,58 @@ fn delete_recording(svc: Svc, id: String) -> R<()> {
 }
 
 #[tauri::command]
+fn rename_recording(svc: Svc, id: String, title: String) -> R<()> {
+    svc.store.rename_recording(&id, &title).map_err(e)?;
+    svc.enqueue(Job::Export { id });
+    Ok(())
+}
+
+#[tauri::command]
+fn archive_recordings(svc: Svc, ids: Vec<String>, archived: bool) -> R<()> {
+    svc.store.set_archived(&ids, archived).map_err(e)
+}
+
+#[tauri::command]
+fn move_recordings(svc: Svc, ids: Vec<String>, folder: Option<i64>) -> R<()> {
+    svc.store.move_recordings(&ids, folder).map_err(e)
+}
+
+#[tauri::command]
+fn list_folders(svc: Svc) -> R<Vec<Folder>> {
+    svc.store.folders().map_err(e)
+}
+
+#[tauri::command]
+fn save_folder(svc: Svc, id: Option<i64>, name: String) -> R<i64> {
+    svc.store.save_folder(id, &name).map_err(e)
+}
+
+#[tauri::command]
+fn delete_folder(svc: Svc, id: i64) -> R<()> {
+    svc.store.delete_folder(id).map_err(e)
+}
+
+/// Поиск по тексту расшифровок.
+#[tauri::command]
+async fn search(svc: Svc<'_>, query: String) -> R<Vec<pipeline::Hit>> {
+    let store = svc.store.clone();
+    blocking(move || pipeline::search(&store, &query)).await
+}
+
+#[tauri::command]
+fn stats(svc: Svc) -> R<Stats> {
+    svc.store.stats().map_err(e)
+}
+
+#[tauri::command]
 fn get_transcript(svc: Svc, id: String) -> R<Transcript> {
     svc.store.load_transcript(&id).map_err(e)
+}
+
+/// Задача, которая сейчас в работе, и всё, что она успела показать.
+#[tauri::command]
+fn live(svc: Svc) -> Option<service::LiveState> {
+    svc.live()
 }
 
 /// Сохраняет правки и пересобирает файлы экспорта.
@@ -118,14 +204,22 @@ fn assign_speaker(svc: Svc, id: String, speaker: String, person_id: Option<i64>,
         }
         None => None,
     };
+    if let Some(pid) = pid {
+        store.confirm_person(pid).map_err(e)?; // находку LLM указали спикером — значит, она верна
+    }
     let people = store.people().map_err(e)?;
     let mut t = store.load_transcript(&id).map_err(e)?;
+    let russian = t.is_russian();
     for s in t.speakers.iter_mut().filter(|s| s.id == speaker) {
         s.person_id = pid;
         s.similarity = None;
         s.name = pid
             .and_then(|pid| people.iter().find(|p| p.id == Some(pid)).map(|p| p.name.clone()))
-            .unwrap_or_else(|| if name.trim().is_empty() { s.id.replace('S', "Спикер ") } else { name.trim().into() });
+            .unwrap_or_else(|| match (name.trim(), s.id.trim_start_matches('S').parse()) {
+                ("", Ok(n)) => pipeline::speaker_label(n, russian),
+                ("", _) => s.id.clone(),
+                (name, _) => name.into(),
+            });
     }
     store.bind_voice(&id, &speaker, pid).map_err(e)?;
     store.save_transcript(&t).map_err(e)?;
@@ -136,6 +230,47 @@ fn assign_speaker(svc: Svc, id: String, speaker: String, person_id: Option<i64>,
 #[tauri::command]
 fn make_protocol(svc: Svc, id: String) {
     svc.enqueue(Job::Protocol { id });
+}
+
+// ---------- выгрузка ----------
+
+/// Собирает документ (расшифровку или протокол) в Markdown или Word и возвращает путь к файлу:
+/// `to` — куда сохранить; без него файл остаётся в папке записи.
+#[tauri::command]
+async fn export_file(svc: Svc<'_>, id: String, doc: Doc, format: Format, to: Option<String>, verbatim: bool) -> R<String> {
+    let store = svc.store.clone();
+    blocking(move || {
+        let t = store.load_transcript(&id)?;
+        let path = pipeline::write_doc(&store, &t, doc, format, verbatim, to.as_deref().map(Path::new))?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+}
+
+/// Текст документа в Markdown — для буфера обмена.
+#[tauri::command]
+fn export_text(svc: Svc, id: String, doc: Doc, verbatim: bool) -> R<String> {
+    let t = svc.store.load_transcript(&id).map_err(e)?;
+    pipeline::markdown(&svc.store, &t, doc, verbatim).map_err(e)
+}
+
+/// Текст из буфера обмена — для «Вставить» в меню приложения.
+#[tauri::command]
+fn clipboard_text() -> R<String> {
+    let mut cmd = if cfg!(target_os = "macos") {
+        std::process::Command::new("pbpaste")
+    } else if cfg!(windows) {
+        let mut c = std::process::Command::new("powershell");
+        c.args(["-NoProfile", "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw"]);
+        c
+    } else {
+        let mut c = std::process::Command::new("xclip");
+        c.args(["-selection", "clipboard", "-o"]);
+        c
+    };
+    // Приложение может быть запущено с любой локалью — текст нужен в UTF-8.
+    let out = cmd.env("LANG", "en_US.UTF-8").output().map_err(e)?;
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 // ---------- справочники ----------
@@ -164,17 +299,48 @@ fn save_person(svc: Svc, person: Person) -> R<i64> {
 fn delete_person(svc: Svc, id: i64) -> R<()> {
     svc.store.delete_person(id).map_err(e)
 }
+/// Сколько находок LLM ждут проверки — для индикаторов в меню.
 #[tauri::command]
-fn delete_voiceprints(svc: Svc, person_id: i64) -> R<()> {
-    svc.store.delete_voices(person_id).map_err(e)
+fn pending_counts(svc: Svc) -> R<Pending> {
+    svc.store.pending().map_err(e)
 }
+
+/// Выгрузка справочника в .xlsx или .csv; возвращает число записей.
 #[tauri::command]
-fn list_suggestions(svc: Svc) -> R<Vec<Suggestion>> {
-    svc.store.suggestions().map_err(e)
+async fn export_directory(svc: Svc<'_>, kind: Directory, path: String) -> R<usize> {
+    let store = svc.store.clone();
+    blocking(move || exchange::export(&store, kind, Path::new(&path))).await
 }
+
 #[tauri::command]
-fn resolve_suggestion(svc: Svc, id: i64, accept: bool) -> R<()> {
-    svc.store.resolve_suggestion(id, accept).map_err(e)
+async fn import_directory(svc: Svc<'_>, kind: Directory, path: String) -> R<exchange::Report> {
+    let store = svc.store.clone();
+    blocking(move || exchange::import(&store, kind, Path::new(&path))).await
+}
+
+// ---------- голоса ----------
+
+#[tauri::command]
+async fn list_voices(svc: Svc<'_>, person_id: i64) -> R<Vec<voices::VoiceSample>> {
+    let store = svc.store.clone();
+    blocking(move || voices::samples(&store, person_id)).await
+}
+
+/// Образец голоса из аудио- или видеофайла.
+#[tauri::command]
+async fn add_voice(svc: Svc<'_>, person_id: i64, path: String) -> R<()> {
+    let store = svc.store.clone();
+    blocking(move || voices::add_from_file(&store, person_id, Path::new(&path))).await
+}
+
+#[tauri::command]
+fn delete_voice(svc: Svc, id: i64) -> R<()> {
+    svc.store.delete_voice(id).map_err(e)
+}
+
+/// Долгая работа (файлы, ffmpeg, модели) — вне главного потока, чтобы окно не подвисало.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> R<T> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(e)?.map_err(e)
 }
 
 // ---------- папки и настройки ----------
@@ -196,14 +362,55 @@ fn get_settings(svc: Svc) -> Settings {
     svc.store.settings()
 }
 #[tauri::command]
-fn save_settings(svc: Svc, settings: Settings) -> R<()> {
-    svc.store.save_settings(&settings).map_err(e)
+fn save_settings(app: AppHandle, svc: Svc, settings: Settings) -> R<()> {
+    if !settings.llm_enabled || settings.llm_provider == LlmProvider::Api {
+        local_llm::unload(); // освободить память
+    }
+    svc.store.save_settings(&settings).map_err(e)?;
+    apply_theme(&app, settings.theme);
+    Ok(())
+}
+
+/// Язык интерфейса, который выбрало окно: «как в системе» оно определяет точнее, чем ядро.
+/// На этом языке ядро пишет этапы, уведомления, меню значка и ошибки.
+#[tauri::command]
+fn set_language(app: AppHandle, language: Language) {
+    lang::set(language);
+    tray::relabel(&app);
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_title(tray::app_name());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        appmenu::install(&app);
+        lang::match_system_dialogs(&app.config().identifier);
+    }
+}
+
+/// Тема ставится нативно, на всё приложение: WebView подхватывает её через `prefers-color-scheme`,
+/// а вместе с ним — системные диалоги, меню и элементы форм.
+fn apply_theme(app: &AppHandle, theme: store::Theme) {
+    app.set_theme(match theme {
+        store::Theme::System => None,
+        store::Theme::Light => Some(tauri::Theme::Light),
+        store::Theme::Dark => Some(tauri::Theme::Dark),
+    });
+}
+
+#[tauri::command]
+fn delete_model(svc: Svc, name: String) -> R<()> {
+    let dir = svc.store.models_dir();
+    let m = models::find(&dir, &name).ok_or_else(|| tr("нет такой модели", "no such model").to_string())?;
+    if m.kind == "llm" {
+        local_llm::unload();
+    }
+    models::remove(&dir, &m).map_err(e)
 }
 
 #[tauri::command]
 async fn test_llm(settings: Settings) -> R<String> {
     tauri::async_runtime::spawn_blocking(move || {
-        llm::chat_json(&settings, "Ответь JSON {\"ok\": true}", "Проверка связи")
+        llm::chat_json(&settings, "Reply with JSON {\"ok\": true}", "ping", r#"{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}"#)
             .map(|v| v.to_string())
             .map_err(e)
     })
@@ -236,44 +443,48 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let store = Arc::new(Store::open()?);
+            let settings = store.settings();
+            lang::set(settings.language);
+            apply_theme(app.handle(), settings.theme);
             pipeline::ensure_templates(&store)?;
+            // Значок и уведомления — до запуска очереди: прерванные задачи продолжаются сразу.
+            tray::build(app.handle())?;
+            notify::init(app.handle())?;
+            #[cfg(target_os = "macos")]
+            {
+                appmenu::install(app.handle());
+                app.on_menu_event(appmenu::on_event);
+            }
             let handle = app.handle().clone();
-            let svc = Service::start(store, Arc::new(move |ev| { let _ = handle.emit("job", ev); }), true);
+            let status = tray::Status::new(store.clone());
+            let svc = Service::start(store, Arc::new(move |signal| match signal {
+                Signal::Job(ev) => {
+                    let _ = handle.emit("job", &ev);
+                    status.update(&handle, &ev);
+                }
+                Signal::Live(ev) => {
+                    let _ = handle.emit("live", &ev);
+                }
+            }), true);
             app.manage(svc);
-
-            // Приложение живёт в трее: закрытие окна не останавливает фоновую обработку папок.
-            let show = MenuItem::with_id(app, "show", "Открыть Ultra Transcript", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Выйти", true, None::<&str>)?;
-            TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
-                .icon_as_template(true)
-                .menu(&Menu::with_items(app, &[&show, &quit])?)
-                .on_menu_event(|app, ev| match ev.id.as_ref() {
-                    "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                    }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .build(app)?;
             Ok(())
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                tray::hide_window(window);
             }
         })
         .invoke_handler(tauri::generate_handler![
-            app_info, install_models, list_recordings, import_files, retry, delete_recording,
-            get_transcript, save_transcript, assign_speaker, make_protocol,
+            app_info, legal, install_models, list_recordings, import_files, retry, delete_recording,
+            rename_recording, archive_recordings, move_recordings, list_folders, save_folder, delete_folder,
+            search, stats, get_transcript, live, save_transcript, assign_speaker, make_protocol,
+            export_file, export_text, clipboard_text,
             list_terms, save_term, delete_term, list_people, save_person, delete_person,
-            delete_voiceprints, list_suggestions, resolve_suggestion,
-            list_rules, save_rule, delete_rule, get_settings, save_settings, test_llm, reveal,
+            pending_counts, export_directory, import_directory, list_voices, add_voice, delete_voice,
+            list_rules, save_rule, delete_rule, get_settings, save_settings, set_language, test_llm, reveal, delete_model,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(tray::on_run_event);
 }

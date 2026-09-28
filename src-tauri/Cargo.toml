@@ -1,7 +1,8 @@
 [package]
 name = "ultra-transcript"
-version = "0.1.0"
-description = "Расшифровка аудио и видео на русском"
+version = "0.2.0"
+description = "Расшифровка аудио и видео на вашем компьютере"
+license = "PolyForm-Noncommercial-1.0.0"
 authors = ["mkharitonov-lab"]
 edition = "2021"
 default-run = "ultra-transcript"
@@ -19,11 +20,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order: поля протокола идут в порядке меток шаблона, а не по алфавиту.
+serde_json = { version = "1", features = ["preserve_order"] }
 sherpa-onnx = "1.13.8"
+# Прогресс диаризации есть только в C API: обёртка sherpa-onnx его не пробрасывает.
+sherpa-onnx-sys = { version = "1.13.8", default-features = false }
 anyhow = "1.0.104"
 regex = "1.13.1"
 zip = "8.6.0"
@@ -38,6 +42,19 @@ aes-gcm = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "multipart"] }
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 base64 = "0.23.1"
+minijinja = { version = "2.24.0", features = ["loader"] }
+minijinja-contrib = { version = "2.24.0", features = ["pycompat"] }
+encoding_rs = "0.8.42"
+# Импорт и экспорт справочников: чтение .xlsx/.xls/.ods, запись .xlsx, CSV.
+calamine = "0.36.1"
+rust_xlsxwriter = "0.99.1"
+csv = "1.4.0"
+# Диаризация pyannote community-1: ONNX Runtime берётся тот, что уже вшит в sherpa-onnx (второй не линкуется),
+# kodama — иерархическая кластеризация для начального приближения VBx.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "alternative-backend"] }
+kodama = "0.3"
+# Nemotron 3: библиотека NeMo-Speech.cpp подгружается при выборе движка — без неё приложение работает.
+libloading = "0.9"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -47,3 +64,19 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# Встроенная LLM: llama.cpp внутри процесса (без сервера и портов).
+[target.'cfg(target_os = "macos")'.dependencies]
+llama-cpp-2 = { version = "0.1.157", default-features = false, features = ["metal", "common"] }
+# Уведомления через системный UserNotifications: запрос разрешения, щелчок по уведомлению.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSError", "NSObject", "NSString"] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = [
+  "std", "bitflags", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest",
+  "UNNotificationResponse", "UNNotificationTrigger", "UNUserNotificationCenter",
+] }
+block2 = "0.6"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+llama-cpp-2 = { version = "0.1.157", default-features = false, features = ["vulkan", "common"] }
+tauri-plugin-notification = "2"

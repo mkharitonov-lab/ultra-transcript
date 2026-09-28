@@ -4,8 +4,8 @@
 </script>
 
 <div class="page">
-  <header>
-    <div>
+  <header data-tauri-drag-region>
+    <div class="heading">
       <h1>{title}</h1>
       {#if subtitle}<p class="muted">{subtitle}</p>{/if}
     </div>
@@ -16,15 +16,13 @@
 
 <style>
   .page { display: flex; flex-direction: column; height: 100vh; min-height: 0; }
-  header { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 38px 28px 14px; border-bottom: 1px solid var(--border); }
+  header {
+    display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 16px;
+    padding: 38px 28px 14px; border-bottom: 1px solid var(--border); position: relative; z-index: 6;
+  }
+  /* В узком окне кнопки уходят на следующую строку, а не сжимают заголовок в колонку. */
+  .heading { flex: 1 1 320px; pointer-events: none; }
   header p { margin: 4px 0 0; max-width: 640px; }
-  .actions { display: flex; gap: 8px; align-items: center; }
+  .actions { display: flex; gap: 8px; align-items: center; margin-left: auto; }
   .body { flex: 1; overflow-y: auto; padding: 16px 28px 40px; }
-  :global(.grid) { width: 100%; border-collapse: collapse; }
-  :global(.grid th) { text-align: left; font-size: 11px; font-weight: 600; color: var(--fg-faint); text-transform: uppercase; letter-spacing: .04em; padding: 0 6px 6px; }
-  :global(.grid td) { padding: 3px; vertical-align: top; }
-  :global(.grid td input) { border-color: transparent; background: transparent; }
-  :global(.grid tr:hover td input) { border-color: var(--border); background: var(--bg-input); }
-  :global(.grid td.tools) { width: 1%; white-space: nowrap; }
-  :global(.empty-state) { color: var(--fg-muted); padding: 30px 0; text-align: center; }
 </style>

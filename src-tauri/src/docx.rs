@@ -4,6 +4,7 @@
 //!   {{таблица.колонка}}   — строка таблицы (или абзац) повторяется для каждого элемента.
 //! Пользователь правит шаблон в Word; набор меток шаблона и есть схема данных.
 
+use crate::lang::tr;
 use anyhow::{Context, Result};
 use regex::{Captures, Regex};
 use serde_json::{Map, Value};
@@ -65,7 +66,7 @@ pub fn name(f: &Field) -> &str {
 
 /// Заполняет шаблон данными и сохраняет результат.
 pub fn render(template: &Path, data: &Map<String, Value>, output: &Path) -> Result<()> {
-    let mut zin = zip::ZipArchive::new(std::fs::File::open(template).context("шаблон не найден")?)?;
+    let mut zin = zip::ZipArchive::new(std::fs::File::open(template).with_context(|| tr("шаблон документа не найден", "the document template was not found"))?)?;
     if let Some(dir) = output.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -190,7 +191,7 @@ fn plain_text(p: &str) -> String {
 }
 
 fn read_part(docx: &Path, part: &str) -> Result<String> {
-    let mut z = zip::ZipArchive::new(std::fs::File::open(docx).context("шаблон не найден")?)?;
+    let mut z = zip::ZipArchive::new(std::fs::File::open(docx).with_context(|| tr("шаблон документа не найден", "the document template was not found"))?)?;
     let mut s = String::new();
     z.by_name(part)?.read_to_string(&mut s)?;
     Ok(s)
@@ -218,70 +219,79 @@ fn cell(content: &str, width: u32, header: bool) -> String {
     format!(r#"<w:tc><w:tcPr><w:tcW w:w="{width}" w:type="dxa"/>{shade}</w:tcPr>{content}</w:tc>"#)
 }
 
-pub fn default_protocol() -> String {
+/// Шаблон протокола по умолчанию: русский или английский.
+pub fn default_protocol(ru: bool) -> String {
+    let l = |a: &'static str, b: &'static str| if ru { a } else { b };
     let widths = [5200, 2400, 1800];
-    let head: String = ["Поручение", "Ответственный", "Срок"]
+    let head: String = [l("Поручение", "Action item"), l("Ответственный", "Owner"), l("Срок", "Due")]
         .iter()
         .zip(widths)
         .map(|(t, w)| cell(&para(t, "", BOLD), w, true))
         .collect();
-    let row: String = ["{{поручения.что}}", "{{поручения.ответственный}}", "{{поручения.срок}}"]
-        .iter()
-        .zip(widths)
-        .map(|(t, w)| cell(&para(t, "", ""), w, false))
-        .collect();
+    let row: String = [
+        l("{{поручения.что}}", "{{action_items.task}}"),
+        l("{{поручения.ответственный}}", "{{action_items.owner}}"),
+        l("{{поручения.срок}}", "{{action_items.due}}"),
+    ]
+    .iter()
+    .zip(widths)
+    .map(|(t, w)| cell(&para(t, "", ""), w, false))
+    .collect();
     let borders = ["top", "left", "bottom", "right", "insideH", "insideV"]
         .iter()
         .map(|b| format!(r#"<w:{b} w:val="single" w:sz="4" w:color="A0A0A0"/>"#))
         .collect::<String>();
     [
-        para("ПРОТОКОЛ СОВЕЩАНИЯ", CENTER, r#"<w:b/><w:sz w:val="28"/>"#),
-        para("{{тема}}", CENTER, ""),
+        para(l("ПРОТОКОЛ СОВЕЩАНИЯ", "MEETING MINUTES"), CENTER, r#"<w:b/><w:sz w:val="28"/>"#),
+        para(l("{{тема}}", "{{topic}}"), CENTER, ""),
         para("", "", ""),
-        format!("<w:p>{}{}</w:p>", run("Дата: ", BOLD), run("{{дата}}", "")),
-        format!("<w:p>{}{}</w:p>", run("Участники: ", BOLD), run("{{участники}}", "")),
-        para("Повестка", H, ""),
-        para("{{повестка}}", BULLET, ""),
-        para("Кратко о ходе обсуждения", H, ""),
-        para("{{краткое_содержание}}", "", ""),
-        para("Решения", H, ""),
-        para("{{решения}}", NUMBERED, ""),
-        para("Поручения", H, ""),
+        format!("<w:p>{}{}</w:p>", run(l("Дата: ", "Date: "), BOLD), run(l("{{дата}}", "{{date}}"), "")),
+        format!("<w:p>{}{}</w:p>", run(l("Участники: ", "Participants: "), BOLD), run(l("{{участники}}", "{{participants}}"), "")),
+        para(l("Повестка", "Agenda"), H, ""),
+        para(l("{{повестка}}", "{{agenda}}"), BULLET, ""),
+        para(l("Кратко о ходе обсуждения", "Summary"), H, ""),
+        para(l("{{краткое_содержание}}", "{{summary}}"), "", ""),
+        para(l("Решения", "Decisions"), H, ""),
+        para(l("{{решения}}", "{{decisions}}"), NUMBERED, ""),
+        para(l("Поручения", "Action items"), H, ""),
         format!(
             r#"<w:tbl><w:tblPr><w:tblW w:w="9400" w:type="dxa"/><w:tblBorders>{borders}</w:tblBorders></w:tblPr><w:tblGrid>{}</w:tblGrid><w:tr>{head}</w:tr><w:tr>{row}</w:tr></w:tbl>"#,
             widths.iter().map(|w| format!(r#"<w:gridCol w:w="{w}"/>"#)).collect::<String>()
         ),
-        para("Открытые вопросы", H, ""),
-        para("{{открытые_вопросы}}", BULLET, ""),
+        para(l("Открытые вопросы", "Open questions"), H, ""),
+        para(l("{{открытые_вопросы}}", "{{open_questions}}"), BULLET, ""),
     ]
     .concat()
 }
 
-pub fn default_transcript() -> String {
+/// Шаблон расшифровки по умолчанию: русский или английский.
+pub fn default_transcript(ru: bool) -> String {
+    let l = |a: &'static str, b: &'static str| if ru { a } else { b };
     [
-        para("{{название}}", "", r#"<w:b/><w:sz w:val="32"/>"#),
-        para("{{дата}} · {{длительность}}", "", GREY),
-        format!("<w:p>{}{}</w:p>", run("Участники: ", BOLD), run("{{участники}}", "")),
+        para(l("{{название}}", "{{title}}"), "", r#"<w:b/><w:sz w:val="32"/>"#),
+        para(l("{{дата}} · {{длительность}}", "{{date}} · {{duration}}"), "", GREY),
+        format!("<w:p>{}{}</w:p>", run(l("Участники: ", "Participants: "), BOLD), run(l("{{участники}}", "{{participants}}"), "")),
         para("", "", ""),
         format!(
             r#"<w:p><w:pPr><w:spacing w:after="160"/></w:pPr>{}{}<w:r><w:br/></w:r>{}</w:p>"#,
-            run("{{реплики.спикер}}", BOLD),
-            run("  {{реплики.время}}", GREY),
-            run("{{реплики.текст}}", "")
+            run(l("{{реплики.спикер}}", "{{utterances.speaker}}"), BOLD),
+            run(l("  {{реплики.время}}", "  {{utterances.time}}"), GREY),
+            run(l("{{реплики.текст}}", "{{utterances.text}}"), "")
         ),
     ]
     .concat()
 }
 
-/// Собирает минимальный валидный .docx с заданным телом.
-pub fn write_docx(path: &Path, body: &str) -> Result<()> {
+/// Собирает минимальный валидный .docx с заданным телом; `ru` — язык текста (для проверки правописания).
+pub fn write_docx(path: &Path, body: &str, ru: bool) -> Result<()> {
+    let lang = if ru { "ru-RU" } else { "en-US" };
     const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     let parts: [(&str, String); 6] = [
         ("[Content_Types].xml", r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>"#.into()),
         ("_rels/.rels", format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{R}/officeDocument" Target="word/document.xml"/></Relationships>"#)),
         ("word/_rels/document.xml.rels", format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{R}/styles" Target="styles.xml"/><Relationship Id="rId2" Type="{R}/numbering" Target="numbering.xml"/></Relationships>"#)),
-        ("word/styles.xml", format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="{W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial" w:eastAsia="Arial"/><w:sz w:val="22"/><w:lang w:val="ru-RU"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="80" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="80"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style></w:styles>"#)),
+        ("word/styles.xml", format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="{W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial" w:eastAsia="Arial"/><w:sz w:val="22"/><w:lang w:val="{lang}"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="80" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="80"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style></w:styles>"#)),
         ("word/numbering.xml", format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:numbering xmlns:w="{W}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num></w:numbering>"#)),
         ("word/document.xml", format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W}" xmlns:r="{R}"><w:body>{body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="850" w:bottom="1134" w:left="1418" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>"#)),
     ];
@@ -316,7 +326,7 @@ mod tests {
     fn renders_default_protocol() {
         let dir = std::env::temp_dir().join("ut-docx-test");
         let (tpl, out) = (dir.join("tpl.docx"), dir.join("protocol.docx"));
-        write_docx(&tpl, &default_protocol()).unwrap();
+        write_docx(&tpl, &default_protocol(true), true).unwrap();
         let data = json!({
             "тема": "Цифровой двойник порта", "дата": "28.09.2026", "участники": "Петров С. И., Смирнова А.",
             "повестка": ["Заявка в Минпромторг", "Смета"],
@@ -337,7 +347,7 @@ mod tests {
     fn extracts_fields_from_default_template() {
         let dir = std::env::temp_dir().join("ut-docx-test");
         let path = dir.join("p.docx");
-        write_docx(&path, &default_protocol()).unwrap();
+        write_docx(&path, &default_protocol(true), true).unwrap();
         let f = fields(&path).unwrap();
         assert!(f.contains(&Field::List("решения".into())));
         assert!(f.contains(&Field::Text("тема".into())));
@@ -345,5 +355,16 @@ mod tests {
             "поручения".into(),
             vec!["что".into(), "ответственный".into(), "срок".into()]
         )));
+    }
+
+    #[test]
+    fn english_templates_have_english_fields() {
+        let dir = std::env::temp_dir().join("ut-docx-test");
+        let path = dir.join("en.docx");
+        write_docx(&path, &default_protocol(false), false).unwrap();
+        let names: Vec<String> = fields(&path).unwrap().iter().map(|f| name(f).to_string()).collect();
+        assert_eq!(names, ["topic", "date", "participants", "agenda", "summary", "decisions", "action_items", "open_questions"]);
+        write_docx(&path, &default_transcript(false), false).unwrap();
+        assert!(fields(&path).unwrap().contains(&Field::Table("utterances".into(), vec!["speaker".into(), "time".into(), "text".into()])));
     }
 }

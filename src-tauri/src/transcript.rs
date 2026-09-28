@@ -13,6 +13,12 @@ pub struct Transcript {
     /// Какой моделью распознано.
     #[serde(default)]
     pub asr_model: String,
+    /// Каким движком разделено по спикерам.
+    #[serde(default)]
+    pub diar_model: String,
+    /// Язык записи: "ru", "en"… Пусто — у записей прежних версий, они на русском.
+    #[serde(default)]
+    pub language: String,
     pub speakers: Vec<Speaker>,
     pub utterances: Vec<Utterance>,
     /// Заполненные поля шаблона протокола (ключи = плейсхолдеры шаблона).
@@ -47,6 +53,11 @@ pub struct Utterance {
 }
 
 impl Transcript {
+    /// Русская ли запись: от этого зависит язык, на котором с ней работает LLM.
+    pub fn is_russian(&self) -> bool {
+        self.language.is_empty() || self.language == "ru"
+    }
+
     pub fn speaker_name(&self, id: &str) -> String {
         self.speakers
             .iter()

@@ -1,18 +1,19 @@
 {
   "name": "ultra-transcript",
-  "version": "0.1.0",
-  "description": "",
+  "version": "0.2.0",
+  "description": "Ultra Transcript — private meeting transcription on your own computer",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
+    "build:demo": "UT_DEMO=1 vite build",
     "preview": "vite preview",
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri"
   },
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.8.0",

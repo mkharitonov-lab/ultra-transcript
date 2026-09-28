@@ -1,5 +1,6 @@
 //! Работа с любыми аудио/видео через ffmpeg.
 
+use crate::lang::tr;
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -37,12 +38,27 @@ pub fn ffmpeg() -> PathBuf {
 
 /// Декодирует любой файл в 16 кГц моно f32 — формат для всех моделей.
 pub fn decode(input: &Path) -> Result<Vec<f32>> {
-    let out = Command::new(ffmpeg())
-        .args(["-nostdin", "-v", "error", "-i"])
-        .arg(input)
+    decode_part(input, None)
+}
+
+/// Как `decode`, но только первые `secs` секунд файла.
+pub fn decode_head(input: &Path, secs: u32) -> Result<Vec<f32>> {
+    decode_part(input, Some(secs))
+}
+
+fn decode_part(input: &Path, secs: Option<u32>) -> Result<Vec<f32>> {
+    let mut cmd = Command::new(ffmpeg());
+    cmd.args(["-nostdin", "-v", "error", "-i"]).arg(input);
+    if let Some(s) = secs {
+        cmd.args(["-t", &s.to_string()]);
+    }
+    let out = cmd
         .args(["-vn", "-ac", "1", "-ar", &SAMPLE_RATE.to_string(), "-f", "f32le", "-"])
         .output()
-        .context("не удалось запустить ffmpeg")?;
+        .context(tr(
+            "не удалось запустить ffmpeg — установите его: brew install ffmpeg",
+            "could not run ffmpeg — install it: brew install ffmpeg"
+        ))?;
     if !out.status.success() {
         bail!("ffmpeg: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
@@ -55,14 +71,29 @@ pub fn decode(input: &Path) -> Result<Vec<f32>> {
 
 /// Сжатый архив записи: Opus, моно, битрейт в кбит/с (24 ≈ 11 МБ/час).
 pub fn encode_archive(input: &Path, output: &Path, kbps: u32) -> Result<()> {
-    let out = Command::new(ffmpeg())
-        .args(["-nostdin", "-v", "error", "-y", "-i"])
-        .arg(input)
+    encode_opus(input, output, kbps, None)
+}
+
+/// Как `encode_archive`, но только первые `secs` секунд файла.
+pub fn encode_clip(input: &Path, output: &Path, kbps: u32, secs: u32) -> Result<()> {
+    encode_opus(input, output, kbps, Some(secs))
+}
+
+fn encode_opus(input: &Path, output: &Path, kbps: u32, secs: Option<u32>) -> Result<()> {
+    let mut cmd = Command::new(ffmpeg());
+    cmd.args(["-nostdin", "-v", "error", "-y", "-i"]).arg(input);
+    if let Some(s) = secs {
+        cmd.args(["-t", &s.to_string()]);
+    }
+    let out = cmd
         .args(["-vn", "-ac", "1", "-c:a", "libopus", "-application", "voip"])
         .args(["-b:a", &format!("{kbps}k")])
         .arg(output)
         .output()
-        .context("не удалось запустить ffmpeg")?;
+        .context(tr(
+            "не удалось запустить ffmpeg — установите его: brew install ffmpeg",
+            "could not run ffmpeg — install it: brew install ffmpeg"
+        ))?;
     if !out.status.success() {
         bail!("ffmpeg: {}", String::from_utf8_lossy(&out.stderr).trim());
     }

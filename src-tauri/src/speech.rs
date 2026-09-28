@@ -1,5 +1,7 @@
-//! Локальные речевые модели (sherpa-onnx): VAD, распознавание, диаризация, голосовые эмбеддинги.
+//! Локальные речевые модели (sherpa-onnx): VAD, распознавание, голосовые эмбеддинги.
+//! Диаризация — в модуле `diar`.
 
+use crate::lang::tr;
 use crate::media::SAMPLE_RATE;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -32,7 +34,18 @@ impl AsrModel {
         }
     }
 
-    fn config(self, models: &Path) -> OfflineRecognizerConfig {
+    /// Язык, на котором модель распознаёт: GigaAM — только русский, Whisper — заданный
+    /// (`language`) или, если задано "auto", определяет сам — тогда здесь пусто.
+    pub fn language(self, language: &str) -> String {
+        match self {
+            Self::Gigaam => "ru".into(),
+            Self::WhisperTurbo if language == "auto" => String::new(),
+            Self::WhisperTurbo => language.trim().to_lowercase(),
+        }
+    }
+
+    /// `language` — см. `AsrModel::language`.
+    fn config(self, models: &Path, language: &str) -> OfflineRecognizerConfig {
         let dir = models.join(self.dir());
         let mut rc = OfflineRecognizerConfig::default();
         match self {
@@ -49,7 +62,8 @@ impl AsrModel {
                 rc.model_config.whisper = OfflineWhisperModelConfig {
                     encoder: p(dir.join("turbo-encoder.int8.onnx")),
                     decoder: p(dir.join("turbo-decoder.int8.onnx")),
-                    language: Some("ru".into()),
+                    // Без языка Whisper определяет его сам для каждого фрагмента.
+                    language: Some(language.to_string()).filter(|l| !l.is_empty()),
                     task: Some("transcribe".into()),
                     tail_paddings: 0,
                     enable_token_timestamps: false,
@@ -77,6 +91,12 @@ pub struct Segment {
     pub words: Vec<Word>,
 }
 
+impl Segment {
+    pub fn text(&self) -> String {
+        self.words.iter().flat_map(|w| w.text.split_whitespace()).collect::<Vec<_>>().join(" ")
+    }
+}
+
 /// Отрезок диаризации: кто говорил с `start` по `end`.
 #[derive(Clone, Copy)]
 pub struct Turn {
@@ -87,9 +107,16 @@ pub struct Turn {
 
 pub struct Engines {
     pub asr: AsrModel,
+    /// Язык распознавания; пусто — модель определяет его сама.
+    pub language: String,
     recognizer: OfflineRecognizer,
+    voice: VoicePrinter,
+}
+
+/// Поиск речи и голосовые эмбеддинги — без распознавания и диаризации: этого хватает,
+/// чтобы снять отпечаток голоса с загруженного файла.
+pub struct VoicePrinter {
     vad: VadModelConfig,
-    diarizer: OfflineSpeakerDiarization,
     embedder: SpeakerEmbeddingExtractor,
 }
 
@@ -101,92 +128,34 @@ fn p(path: impl AsRef<Path>) -> Option<String> {
     Some(path.as_ref().to_string_lossy().into_owned())
 }
 
-fn threads() -> i32 {
+pub(crate) fn threads() -> i32 {
     std::thread::available_parallelism()
         .map(|n| (n.get() as i32 - 2).clamp(2, 8))
         .unwrap_or(4)
 }
 
 impl Engines {
-    pub fn load(models: &Path, asr: AsrModel, cluster_threshold: f32) -> Result<Self> {
-        let recognizer = OfflineRecognizer::create(&asr.config(models))
-            .ok_or_else(|| anyhow!("не удалось загрузить модель распознавания {}", asr.title()))?;
-
-        let vad = VadModelConfig {
-            silero_vad: SileroVadModelConfig {
-                model: p(models.join(VAD_FILE)),
-                threshold: 0.5,
-                min_silence_duration: 0.5,
-                min_speech_duration: 0.25,
-                window_size: 512,
-                max_speech_duration: 20.0,
-            },
-            ten_vad: Default::default(),
-            sample_rate: SAMPLE_RATE,
-            num_threads: 1,
-            provider: None,
-            debug: false,
-        };
-
-        let embedding = SpeakerEmbeddingExtractorConfig {
-            model: p(models.join(EMBEDDING_FILE)),
-            num_threads: threads(),
-            ..Default::default()
-        };
-        let diarizer = OfflineSpeakerDiarization::create(&OfflineSpeakerDiarizationConfig {
-            segmentation: OfflineSpeakerSegmentationModelConfig {
-                pyannote: OfflineSpeakerSegmentationPyannoteModelConfig {
-                    model: p(models.join(SEGMENTATION_DIR).join("model.onnx")),
-                    // Сдвиг окна 10% (по умолчанию) почти не улучшает разметку, но в 2–3 раза медленнее.
-                    window_shift_ratio: 0.25,
-                },
-                num_threads: threads(),
-                ..Default::default()
-            },
-            embedding: embedding.clone(),
-            clustering: FastClusteringConfig {
-                num_clusters: -1,
-                threshold: cluster_threshold,
-                ..Default::default()
-            },
-            min_duration_on: 0.3,
-            min_duration_off: 0.5,
-            ..Default::default()
-        })
-        .ok_or_else(|| anyhow!("не удалось загрузить модель диаризации"))?;
-        let embedder = SpeakerEmbeddingExtractor::create(&embedding)
-            .ok_or_else(|| anyhow!("не удалось загрузить модель голосовых эмбеддингов"))?;
-
-        Ok(Self { asr, recognizer, vad, diarizer, embedder })
+    /// `language` — язык записей из настроек (код или "auto"); нужен только Whisper.
+    pub fn load(models: &Path, asr: AsrModel, language: &str) -> Result<Self> {
+        let language = asr.language(language);
+        let recognizer = OfflineRecognizer::create(&asr.config(models, &language)).ok_or_else(|| {
+            anyhow!("{} {}", tr("не удалось загрузить модель распознавания", "could not load the speech model"), asr.title())
+        })?;
+        let voice = VoicePrinter::load(models)?;
+        Ok(Self { asr, language, recognizer, voice })
     }
 
     /// Режет запись на фрагменты речи по паузам.
     pub fn speech_regions(&self, samples: &[f32]) -> Result<Vec<(usize, Vec<f32>)>> {
-        let vad = VoiceActivityDetector::create(&self.vad, 60.0)
-            .ok_or_else(|| anyhow!("не удалось создать VAD"))?;
-        let mut out = vec![];
-        let mut drain = |vad: &VoiceActivityDetector| {
-            while !vad.is_empty() {
-                if let Some(seg) = vad.front() {
-                    out.push((seg.start() as usize, seg.samples().to_vec()));
-                }
-                vad.pop();
-            }
-        };
-        for chunk in samples.chunks(512) {
-            vad.accept_waveform(chunk);
-            drain(&vad);
-        }
-        vad.flush();
-        drain(&vad);
-        Ok(out)
+        self.voice.speech_regions(samples)
     }
 
-    /// Распознаёт фрагменты пачками; `progress` получает долю выполненного.
+    /// Распознаёт фрагменты пачками; после каждой пачки `progress` получает долю выполненного
+    /// и только что распознанные фрагменты — их можно показывать, не дожидаясь конца.
     pub fn recognize(
         &self,
         regions: &[(usize, Vec<f32>)],
-        mut progress: impl FnMut(f32),
+        mut progress: impl FnMut(f32, &[Segment]),
     ) -> Vec<Segment> {
         let mut segments = Vec::with_capacity(regions.len());
         for (i, batch) in regions.chunks(8).enumerate() {
@@ -212,20 +181,67 @@ impl Engines {
                     .unwrap_or_default();
                 segments.push(Segment { start: offset, end, words });
             }
-            progress(((i + 1) * 8).min(regions.len()) as f32 / regions.len().max(1) as f32);
+            let done = ((i + 1) * 8).min(regions.len());
+            progress(done as f32 / regions.len().max(1) as f32, &segments[segments.len() - batch.len()..]);
         }
         segments
     }
 
-    pub fn diarize(&self, samples: &[f32]) -> Result<Vec<Turn>> {
-        let r = self
-            .diarizer
-            .process(samples)
-            .ok_or_else(|| anyhow!("диаризация не удалась"))?;
-        Ok(r.sort_by_start_time()
-            .into_iter()
-            .map(|s| Turn { start: s.start, end: s.end, speaker: s.speaker })
-            .collect())
+    /// L2-нормированный голосовой эмбеддинг фрагмента.
+    pub fn embed(&self, samples: &[f32]) -> Option<Vec<f32>> {
+        self.voice.embed(samples)
+    }
+}
+
+/// Сколько речи нужно для отпечатка голоса из файла, секунд.
+pub const MIN_VOICE_SECONDS: f32 = 3.0;
+
+impl VoicePrinter {
+    pub fn load(models: &Path) -> Result<Self> {
+        let vad = VadModelConfig {
+            silero_vad: SileroVadModelConfig {
+                model: p(models.join(VAD_FILE)),
+                threshold: 0.5,
+                min_silence_duration: 0.5,
+                min_speech_duration: 0.25,
+                window_size: 512,
+                max_speech_duration: 20.0,
+            },
+            ten_vad: Default::default(),
+            sample_rate: SAMPLE_RATE,
+            num_threads: 1,
+            provider: None,
+            debug: false,
+        };
+        let embedder = SpeakerEmbeddingExtractor::create(&SpeakerEmbeddingExtractorConfig {
+            model: p(models.join(EMBEDDING_FILE)),
+            num_threads: threads(),
+            ..Default::default()
+        })
+        .ok_or_else(|| anyhow!(tr("не удалось загрузить модель голосов", "could not load the voice model")))?;
+        Ok(Self { vad, embedder })
+    }
+
+    /// Режет запись на фрагменты речи по паузам.
+    pub fn speech_regions(&self, samples: &[f32]) -> Result<Vec<(usize, Vec<f32>)>> {
+        let vad = VoiceActivityDetector::create(&self.vad, 60.0)
+            .ok_or_else(|| anyhow!(tr("не удалось загрузить модель поиска речи", "could not load the speech detection model")))?;
+        let mut out = vec![];
+        let mut drain = |vad: &VoiceActivityDetector| {
+            while !vad.is_empty() {
+                if let Some(seg) = vad.front() {
+                    out.push((seg.start() as usize, seg.samples().to_vec()));
+                }
+                vad.pop();
+            }
+        };
+        for chunk in samples.chunks(512) {
+            vad.accept_waveform(chunk);
+            drain(&vad);
+        }
+        vad.flush();
+        drain(&vad);
+        Ok(out)
     }
 
     /// L2-нормированный голосовой эмбеддинг фрагмента.
@@ -240,6 +256,25 @@ impl Engines {
         normalize(&mut v);
         Some(v)
     }
+
+    /// Отпечаток голоса по речи во всей записи, паузы не в счёт. Как для спикера в расшифровке:
+    /// до 90 с речи кусками не длиннее 10 с. None — речи меньше `MIN_VOICE_SECONDS`.
+    pub fn voiceprint(&self, samples: &[f32]) -> Result<Option<Vec<f32>>> {
+        let sr = SAMPLE_RATE as usize;
+        let (mut parts, mut total) = (vec![], 0.0);
+        for (_, region) in self.speech_regions(samples)? {
+            if total >= 90.0 {
+                break;
+            }
+            let piece = &region[..region.len().min(10 * sr)];
+            if let Some(e) = self.embed(piece) {
+                let w = piece.len() as f32 / sr as f32;
+                parts.push((e, w));
+                total += w;
+            }
+        }
+        Ok(if total < MIN_VOICE_SECONDS { None } else { centroid(&parts) })
+    }
 }
 
 pub fn normalize(v: &mut [f32]) {
@@ -247,6 +282,16 @@ pub fn normalize(v: &mut [f32]) {
     if n > 0.0 {
         v.iter_mut().for_each(|x| *x /= n);
     }
+}
+
+/// Средний голос по кускам речи с весами (обычно — длительностями), L2-нормированный.
+pub fn centroid(parts: &[(Vec<f32>, f32)]) -> Option<Vec<f32>> {
+    let mut c = vec![0.0; parts.first()?.0.len()];
+    for (e, w) in parts {
+        c.iter_mut().zip(e).for_each(|(c, x)| *c += x * w);
+    }
+    normalize(&mut c);
+    Some(c)
 }
 
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -273,12 +318,13 @@ fn text_to_words(text: &str, offset: f32, end: f32) -> Vec<Word> {
         .collect()
 }
 
-/// Известные «галлюцинации» Whisper на русском — фразы из субтитров обучающих данных,
+/// Известные «галлюцинации» Whisper — фразы из субтитров обучающих данных,
 /// которые модель выдаёт на тишине и шуме.
 fn is_hallucination(text: &str) -> bool {
     const PHRASES: &[&str] = &[
         "субтитры", "продолжение следует", "спасибо за просмотр", "редактор субтитров",
         "корректор", "подписывайтесь на канал", "ставьте лайк",
+        "thanks for watching", "thank you for watching", "subtitles by", "amara.org", "please subscribe",
     ];
     let t = text.trim().to_lowercase();
     t.is_empty() || (t.chars().count() < 80 && PHRASES.iter().any(|p| t.contains(p)))
