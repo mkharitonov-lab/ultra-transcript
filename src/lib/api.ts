@@ -143,7 +143,9 @@ export const api = {
 };
 
 export const recordingDir = (dataDir: string, id: string) => `${dataDir}/recordings/${id}`;
-export const audioUrl = (dataDir: string, id: string) => convertFileSrc(`${recordingDir(dataDir, id)}/audio.ogg`);
+/** Звук записи: исходный или обработанный для распознавания (его может не быть). */
+export const audioUrl = (dataDir: string, id: string, clean = false) =>
+  convertFileSrc(`${recordingDir(dataDir, id)}/${clean ? "audio.clean.ogg" : "audio.ogg"}`);
 
 /** Форматы, которые умеет открывать ядро (через ffmpeg). */
 export const mediaFilter = () => ({

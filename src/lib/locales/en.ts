@@ -149,6 +149,9 @@ const en: Dict = {
   "player.position": "Position",
   "player.speed": "Speed",
   "player.follow": "Scroll the text along with the audio",
+  "player.cleanLabel": "Processed audio",
+  "player.clean": "Processed audio: noise removed, volume leveled. Click to hear the original recording",
+  "player.original": "Original recording. Click to hear the processed audio",
 
   "welcome.title": "Welcome",
   "welcome.lead": "Transcripts of meetings, interviews and lectures — made right on your computer.",
@@ -325,7 +328,7 @@ const en: Dict = {
   "set.voices.howHint": "Name a speaker in a transcript, and in future recordings this person is recognized by voice. Voice samples are kept in People.",
   "set.voices.open": "Open",
 
-  "set.audio.hint": "Prepares the sound for recognition. The player and the archive keep the original recording.",
+  "set.audio.hint": "Prepares the sound for recognition. The player plays the processed recording, the archive keeps the original.",
   "set.audio.denoise": "Reduce noise",
   "set.audio.denoiseHint": "Keyboard clatter, hum, fans, street noise.",
   "set.audio.level": "Level the volume of voices",

@@ -27,6 +27,9 @@
   let time = $state(0);
   let paused = $state(true);
   let rate = $state(1);
+  /** Есть ли у записи обработанный звук (узнаём, попробовав его открыть) и играет ли он. */
+  let hasClean = $state(true);
+  let clean = $state(true);
   let follow = $state(true);
   let list = $state<HTMLElement>();
 
@@ -51,6 +54,8 @@
     const now = { working: !!job || recording.status === "processing", drafts: job?.drafts ?? 0 };
     const finished = seen.working && !now.working;
     if ((finished || now.drafts > seen.drafts) && !document.activeElement?.closest?.(".text")) load();
+    // Новая расшифровка могла сохранить обработанный звук.
+    if (finished) hasClean = true;
     seen = now;
   });
   $effect(() => {
@@ -78,6 +83,16 @@
   });
 
   const toggle = () => audio && (paused ? audio.play() : audio.pause());
+  /** Обработанный звук ↔ исходная запись — с того же места. */
+  function switchSound() {
+    const [at, playing] = [time, !paused];
+    clean = !clean;
+    audio?.addEventListener("loadedmetadata", () => {
+      if (!audio) return;
+      audio.currentTime = at;
+      if (playing) audio.play();
+    }, { once: true });
+  }
   function seek(sec: number) {
     if (!audio) return;
     audio.currentTime = sec;
@@ -322,7 +337,8 @@
 
   {#if tr && !streaming}
     <footer class="player">
-      <audio bind:this={audio} src={audioUrl(app.info!.data_dir, recording.id)} bind:currentTime={time} bind:paused bind:playbackRate={rate} preload="metadata"></audio>
+      <audio bind:this={audio} src={audioUrl(app.info!.data_dir, recording.id, hasClean && clean)} onerror={() => (hasClean = false)}
+        bind:currentTime={time} bind:paused bind:playbackRate={rate} preload="metadata"></audio>
       <button class="ghost icon" onclick={() => audio && (audio.currentTime -= 5)} title={t("player.back")} aria-label={t("player.back")}><Icon name="skip-back" size={15} /></button>
       <button class="play" onclick={toggle} aria-label={t(paused ? "player.play" : "player.pause")}><Icon name={paused ? "play" : "pause"} size={15} /></button>
       <button class="ghost icon" onclick={() => audio && (audio.currentTime += 5)} title={t("player.forward")} aria-label={t("player.forward")}><Icon name="skip-fwd" size={15} /></button>
@@ -332,6 +348,9 @@
       <span class="time faint">{fmtTime(tr.duration)}</span>
       <button class="ghost rate" title={t("player.speed")}
         onclick={(e) => openMenu(e, [0.75, 1, 1.25, 1.5, 1.75, 2].map((r): MenuItem => ({ label: `${r}×`, checked: rate === r, action: () => (rate = r) })))}>{rate}×</button>
+      {#if hasClean}
+        <button class="ghost icon" class:on={clean} onclick={switchSound} aria-pressed={clean} title={t(clean ? "player.clean" : "player.original")} aria-label={t("player.cleanLabel")}><Icon name="sliders" size={15} /></button>
+      {/if}
       <button class="ghost icon" class:on={follow} onclick={() => (follow = !follow)} aria-pressed={follow} title={t("player.follow")} aria-label={t("player.follow")}><Icon name="target" size={15} /></button>
     </footer>
   {/if}

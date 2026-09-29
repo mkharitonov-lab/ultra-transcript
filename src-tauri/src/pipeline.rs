@@ -53,6 +53,15 @@ pub fn transcribe(
     media::encode_archive(input, &dir.join("audio.ogg"), settings.archive_kbps)?;
     let prepared =
         audio::for_recognition(&samples, &settings, &store.models_dir(), &|f| report.stage(Stage::Denoise, f), &mut warnings);
+    // Обработанный звук — для плеера; архив остаётся исходным. Без копии плеер играет архив.
+    let clean = dir.join(audio::PLAYER_FILE);
+    let saved = prepared.as_deref().map(|x| media::encode_samples(x, &clean, settings.archive_kbps));
+    if let Some(Err(e)) = &saved {
+        warnings.push(format!("{}: {e:#}", tr("Обработанный звук для плеера не сохранён", "The processed audio for the player was not saved")));
+    }
+    if !matches!(saved, Some(Ok(()))) {
+        let _ = std::fs::remove_file(&clean);
+    }
 
     report.stage(Stage::Recognize, 0.0);
     let regions = engines.speech_regions(prepared.as_deref().unwrap_or(&samples))?;

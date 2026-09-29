@@ -2,8 +2,9 @@
 
 use crate::lang::tr;
 use anyhow::{bail, Context, Result};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub const SAMPLE_RATE: i32 = 16_000;
 
@@ -85,17 +86,43 @@ fn encode_opus(input: &Path, output: &Path, kbps: u32, secs: Option<u32>) -> Res
     if let Some(s) = secs {
         cmd.args(["-t", &s.to_string()]);
     }
-    let out = cmd
-        .args(["-vn", "-ac", "1", "-c:a", "libopus", "-application", "voip"])
-        .args(["-b:a", &format!("{kbps}k")])
-        .arg(output)
-        .output()
-        .context(tr(
-            "не удалось запустить ffmpeg — установите его: brew install ffmpeg",
-            "could not run ffmpeg — install it: brew install ffmpeg"
-        ))?;
+    let out = opus(&mut cmd, output, kbps).output().context(no_ffmpeg())?;
     if !out.status.success() {
         bail!("ffmpeg: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
     Ok(())
+}
+
+/// Сжатая копия уже декодированного звука (16 кГц моно f32) — в формате архива.
+pub fn encode_samples(samples: &[f32], output: &Path, kbps: u32) -> Result<()> {
+    let mut cmd = Command::new(ffmpeg());
+    cmd.args(["-v", "error", "-y", "-f", "f32le", "-ar", &SAMPLE_RATE.to_string(), "-ac", "1", "-i", "-"]);
+    let mut child = opus(&mut cmd, output, kbps)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context(no_ffmpeg())?;
+    let mut stdin = child.stdin.take().context("ffmpeg: stdin")?;
+    // Если ffmpeg завершился раньше времени, запись оборвётся — причину он сообщит сам.
+    for chunk in samples.chunks(1 << 16) {
+        let bytes: Vec<u8> = chunk.iter().flat_map(|v| v.to_le_bytes()).collect();
+        if stdin.write_all(&bytes).is_err() {
+            break;
+        }
+    }
+    drop(stdin);
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        bail!("ffmpeg: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(())
+}
+
+fn opus<'a>(cmd: &'a mut Command, output: &Path, kbps: u32) -> &'a mut Command {
+    cmd.args(["-vn", "-ac", "1", "-c:a", "libopus", "-application", "voip"]).args(["-b:a", &format!("{kbps}k")]).arg(output)
+}
+
+fn no_ffmpeg() -> &'static str {
+    tr("не удалось запустить ffmpeg — установите его: brew install ffmpeg", "could not run ffmpeg — install it: brew install ffmpeg")
 }
