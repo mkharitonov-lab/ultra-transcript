@@ -78,6 +78,11 @@ pub fn catalog(dir: &Path) -> Vec<Model> {
             tr("Русская речь с пунктуацией", "Russian speech with punctuation"), tr("Сбер", "Sber"), 170),
         asr("whisper-turbo", AsrModel::WhisperTurbo, "Whisper large-v3-turbo",
             tr("Речь на разных языках", "Speech in many languages"), "OpenAI", 563),
+        Model {
+            license: "CC BY 4.0",
+            ..asr("parakeet", AsrModel::Parakeet, "Parakeet TDT 0.6B v3",
+                  tr("Речь на 25 европейских языках", "Speech in 25 European languages"), "NVIDIA", 487)
+        },
         m("vad", "Silero VAD", tr("Поиск речи в записи", "Finds speech in a recording"), "Silero", "MIT",
           format!("{BASE}/asr-models/{}", speech::VAD_FILE), speech::VAD_FILE, 1),
         m("segmentation", "pyannote segmentation 3.0", tr("Границы реплик", "Finds who speaks when"), "pyannote", "MIT",

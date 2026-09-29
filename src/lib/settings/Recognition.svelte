@@ -23,8 +23,9 @@
 
 <Group title={t("set.asr.model")} hint={t("set.asr.modelHint")} bare>
   <ModelChoice bind:value={s.asr_model} onchange={save} options={[
-    { value: "gigaam", title: "GigaAM v3", about: t("set.asr.gigaam"), model: model("gigaam"), badge: t("set.asr.forRussian") },
-    { value: "whisper-turbo", title: "Whisper large-v3-turbo", about: t("set.asr.whisper"), model: model("whisper-turbo") },
+    { value: "gigaam", title: "GigaAM v3", model: model("gigaam") },
+    { value: "whisper-turbo", title: "Whisper large-v3-turbo", model: model("whisper-turbo") },
+    { value: "parakeet", title: "Parakeet TDT 0.6B v3", model: model("parakeet") },
   ]} />
 </Group>
 

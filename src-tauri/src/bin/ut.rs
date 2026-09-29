@@ -1,5 +1,5 @@
 //! CLI для проверки конвейера без интерфейса:
-//! `ut <файл> [--protocol] [--whisper] [--lang <язык>] [--diar off|pyannote3|community1|nemotron3] [--threshold <порог>] [--llm <модель>] [--raw] [--live]`.
+//! `ut <файл> [--protocol] [--whisper|--parakeet] [--lang <язык>] [--diar off|pyannote3|community1|nemotron3] [--threshold <порог>] [--llm <модель>] [--raw] [--live]`.
 //! `--raw` — без предобработки звука (шумоподавления и выравнивания громкости);
 //! `--lang` — язык записи для Whisper (ru, en… или auto); `--live` — печатать текст по мере распознавания.
 
@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
     let file = args.iter().enumerate()
         .find(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--llm", "--diar", "--threshold", "--lang"].contains(&args[i - 1].as_str())))
         .map(|(_, a)| a)
-        .expect("использование: ut <файл> [--protocol] [--whisper] [--diar <движок>] [--threshold <порог>] [--llm <модель>] [--raw] [--live]");
+        .expect("использование: ut <файл> [--protocol] [--whisper|--parakeet] [--diar <движок>] [--threshold <порог>] [--llm <модель>] [--raw] [--live]");
     let raw = args.iter().any(|a| a == "--raw");
     // Своя библиотека во временной папке: CLI не должен подхватывать задачи
     // и менять настройки работающего приложения. Модели — общие.
@@ -23,7 +23,13 @@ fn main() -> anyhow::Result<()> {
     }
     let store = Arc::new(Store::open()?);
     pipeline::ensure_templates(&store)?;
-    let asr = if args.iter().any(|a| a == "--whisper") { AsrModel::WhisperTurbo } else { AsrModel::Gigaam };
+    let asr = if args.iter().any(|a| a == "--whisper") {
+        AsrModel::WhisperTurbo
+    } else if args.iter().any(|a| a == "--parakeet") {
+        AsrModel::Parakeet
+    } else {
+        AsrModel::Gigaam
+    };
     let diar: DiarModel = match value("--diar") {
         Some(v) => serde_json::from_value(serde_json::Value::String(v.clone()))
             .map_err(|_| anyhow::anyhow!("--diar: off, pyannote3, community1 или nemotron3"))?,

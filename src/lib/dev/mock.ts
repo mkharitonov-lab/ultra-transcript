@@ -39,6 +39,7 @@ function models(): Model[] {
   const all = [
     m("gigaam", "asr", "GigaAM v3", l("Русская речь с пунктуацией", "Russian speech with punctuation"), l("Сбер", "Sber"), "MIT", 170, { asr: "gigaam" }),
     m("whisper-turbo", "asr", "Whisper large-v3-turbo", l("Речь на разных языках", "Speech in many languages"), "OpenAI", "MIT", 563, { asr: "whisper-turbo" }),
+    m("parakeet", "asr", "Parakeet TDT 0.6B v3", l("Речь на 25 европейских языках", "Speech in 25 European languages"), "NVIDIA", "CC BY 4.0", 487, { asr: "parakeet" }),
     m("vad", "core", "Silero VAD", l("Поиск речи в записи", "Finds speech in a recording"), "Silero", "MIT", 1),
     m("segmentation", "core", "pyannote segmentation 3.0", l("Границы реплик", "Finds who speaks when"), "pyannote", "MIT", 7),
     m("embedding", "core", "WeSpeaker ResNet34-LM", l("Голосовые профили", "Voice profiles"), "WeSpeaker", "CC BY 4.0", 27),

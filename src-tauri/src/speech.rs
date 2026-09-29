@@ -12,11 +12,13 @@ use std::path::Path;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AsrModel {
-    /// GigaAM v3 (Сбер) с пунктуацией: для русского точнее и быстрее.
+    /// GigaAM v3 (Сбер) с пунктуацией, только русский.
     #[default]
     Gigaam,
     /// Whisper large-v3-turbo (OpenAI): многоязычная.
     WhisperTurbo,
+    /// Parakeet TDT 0.6B v3 (NVIDIA): 25 европейских языков, язык определяет сама.
+    Parakeet,
 }
 
 impl AsrModel {
@@ -24,6 +26,7 @@ impl AsrModel {
         match self {
             Self::Gigaam => "sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16",
             Self::WhisperTurbo => "sherpa-onnx-whisper-turbo",
+            Self::Parakeet => "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
         }
     }
 
@@ -31,14 +34,17 @@ impl AsrModel {
         match self {
             Self::Gigaam => "GigaAM v3",
             Self::WhisperTurbo => "Whisper large-v3-turbo",
+            Self::Parakeet => "Parakeet TDT 0.6B v3",
         }
     }
 
     /// Язык, на котором модель распознаёт: GigaAM — только русский, Whisper — заданный
     /// (`language`) или, если задано "auto", определяет сам — тогда здесь пусто.
+    /// Parakeet язык не задаётся — всегда определяет сама.
     pub fn language(self, language: &str) -> String {
         match self {
             Self::Gigaam => "ru".into(),
+            Self::Parakeet => String::new(),
             Self::WhisperTurbo if language == "auto" => String::new(),
             Self::WhisperTurbo => language.trim().to_lowercase(),
         }
@@ -54,6 +60,15 @@ impl AsrModel {
                     encoder: p(dir.join("encoder.int8.onnx")),
                     decoder: p(dir.join("decoder.onnx")),
                     joiner: p(dir.join("joiner.onnx")),
+                };
+                rc.model_config.tokens = p(dir.join("tokens.txt"));
+                rc.model_config.model_type = Some("nemo_transducer".into());
+            }
+            Self::Parakeet => {
+                rc.model_config.transducer = OfflineTransducerModelConfig {
+                    encoder: p(dir.join("encoder.int8.onnx")),
+                    decoder: p(dir.join("decoder.int8.onnx")),
+                    joiner: p(dir.join("joiner.int8.onnx")),
                 };
                 rc.model_config.tokens = p(dir.join("tokens.txt"));
                 rc.model_config.model_type = Some("nemo_transducer".into());
@@ -175,7 +190,7 @@ impl Engines {
                 let words = st
                     .get_result()
                     .map(|r| match self.asr {
-                        AsrModel::Gigaam => tokens_to_words(&r.tokens, r.timestamps.as_deref(), offset, end),
+                        AsrModel::Gigaam | AsrModel::Parakeet => tokens_to_words(&r.tokens, r.timestamps.as_deref(), offset, end),
                         AsrModel::WhisperTurbo => text_to_words(&r.text, offset, end),
                     })
                     .unwrap_or_default();

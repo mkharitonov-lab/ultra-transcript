@@ -10,7 +10,7 @@ minutes with decisions and action items. It runs on your own computer: recording
 ## What it does
 
 - **Transcribes audio and video.** Drop a file on the window — mp3, m4a, wav, mp4, mov and more.
-  Russian speech is recognized by the GigaAM model, English and other languages by Whisper.
+  Speech recognition models to choose from: GigaAM v3, Whisper large-v3-turbo, Parakeet TDT 0.6B v3.
 - **Shows the text right away.** The transcript appears as it is recognized and the minutes are written
   before your eyes — no need to wait for processing to finish.
 - **Separates speakers and recognizes voices.** Tell it once who is speaking, and that person
@@ -38,7 +38,7 @@ minutes with decisions and action items. It runs on your own computer: recording
    in a few seconds.
 4. **Name the speakers.** Click “Speaker 1” above the text and enter a name.
 
-For recordings in English choose Whisper in Settings → Speech recognition.
+GigaAM v3 is Russian-only: for recordings in other languages choose Whisper or Parakeet in Settings → Speech recognition.
 The interface is available in English and Russian, with light and dark themes.
 
 ## Getting the best results

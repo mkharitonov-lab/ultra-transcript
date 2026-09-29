@@ -7,7 +7,7 @@
   type Option = {
     value: T;
     title: string;
-    about: string;
+    about?: string;
     /** Модель, которую нужно скачать, чтобы выбрать вариант; нет — скачивать нечего. */
     model?: Model | null;
     badge?: string;
@@ -34,7 +34,7 @@
         <span class="dot"></span>
         <span class="text">
           <span class="title">{o.title}{#if o.badge}<span class="badge">{o.badge}</span>{/if}</span>
-          <span class="about muted">{o.about}</span>
+          {#if o.about}<span class="about muted">{o.about}</span>{/if}
           {#if o.blocked}<span class="about faint">{o.blocked}</span>{/if}
         </span>
       </button>

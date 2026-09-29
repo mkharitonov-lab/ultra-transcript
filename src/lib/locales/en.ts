@@ -306,9 +306,6 @@ const en: Dict = {
 
   "set.asr.model": "Model",
   "set.asr.modelHint": "Used for new recordings. Any recording can be transcribed again with another model from its menu.",
-  "set.asr.forRussian": "for Russian",
-  "set.asr.gigaam": "More accurate and several times faster on Russian speech. Adds punctuation and writes numbers as digits. Russian only.",
-  "set.asr.whisper": "For English and other languages. Slower; on noise and silence it sometimes makes text up.",
   "set.asr.language": "Language of recordings",
   "set.asr.languageHint": "When the language is known in advance, recognition is faster and more accurate.",
   "set.asr.auto": "Detect automatically",
