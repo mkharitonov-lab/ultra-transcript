@@ -46,10 +46,10 @@ function models(): Model[] {
     m("denoiser", "denoise", "DPDFNet", l("Подавление шума", "Noise reduction"), "Ceva", "Apache 2.0", 9),
     m("community1", "diar", "pyannote community-1", l("Разделение по спикерам", "Speaker separation"), "pyannote", "CC BY 4.0", 27, { diar: "community1" }),
     m("nemotron3", "diar", "Nemotron 3 Diarization", l("Разделение по спикерам", "Speaker separation"), "NVIDIA", "OpenMDW 1.1", 107, { diar: "nemotron3" }),
-    m("gigachat-lightning", "llm", "GigaChat 3.1 Lightning", l("Русский — родной язык модели. Быстрая.", "Russian is its native language. Fast."), l("Сбер", "Sber"), "MIT", 6470),
-    m("t-lite", "llm", "T-lite 2.1", l("Хорошо держит деловой стиль.", "Keeps a business tone well."), l("Т-Банк", "T-Bank"), "Apache 2.0", 5030),
-    m("yandexgpt-lite", "llm", "YandexGPT-5 Lite 8B", l("Обучена в основном на русских текстах.", "Trained mostly on Russian texts."), l("Яндекс", "Yandex"), l("лицензия Яндекса, с ограничениями", "Yandex license, restrictions apply"), 4920),
-    m("qwen3-4b", "llm", "Qwen3 4B Instruct", l("Самая лёгкая — для компьютеров с 8 ГБ памяти. Хорошо знает и английский.", "The lightest one — for computers with 8 GB of memory. Good at English too."), "Alibaba", "Apache 2.0", 2500),
+    m("gigachat-lightning", "llm", "GigaChat 3.1 Lightning", l("ИИ-помощник", "AI assistant"), l("Сбер", "Sber"), "MIT", 6470),
+    m("t-lite", "llm", "T-lite 2.1", l("ИИ-помощник", "AI assistant"), l("Т-Банк", "T-Bank"), "Apache 2.0", 5030),
+    m("yandexgpt-lite", "llm", "YandexGPT-5 Lite 8B", l("ИИ-помощник", "AI assistant"), l("Яндекс", "Yandex"), l("лицензия Яндекса, с ограничениями", "Yandex license, restrictions apply"), 4920),
+    m("qwen3-4b", "llm", "Qwen3 4B Instruct", l("ИИ-помощник", "AI assistant"), "Alibaba", "Apache 2.0", 2500),
   ];
   for (const x of all) x.required = x.kind === "core" || x.asr === settings.asr_model || x.diar === settings.diar_model;
   return all;
@@ -175,14 +175,12 @@ async function transcribe(r: Recording) {
   );
   await stage(r.id, "transcribe", "diarize", l("Разделение по спикерам", "Separating speakers"), 5);
   r.duration = full.duration;
-  transcripts[r.id] = { ...full, utterances: full.utterances.map((u) => ({ ...u, clean: u.text })) };
-  await live({ recording_id: r.id, kind: "draft" });
+  // Как в ядре: в окне — только отредактированный текст, по частям.
   await stage(r.id, "transcribe", "polish", l("Редактура текста", "Polishing text"), 3, (i) => {
-    transcripts[r.id].utterances.forEach((u, n) => {
-      if (n < (i + 1) * 2) u.clean = full.utterances[n].clean;
-    });
+    transcripts[r.id] = { ...full, utterances: full.utterances.slice(0, (i + 1) * 2) };
     return live({ recording_id: r.id, kind: "draft" });
   });
+  transcripts[r.id] = full;
   r.status = "done";
   await job(r.id, "transcribe", "done", "", "", 1);
 }

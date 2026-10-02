@@ -11,7 +11,11 @@
   const model = (id: AsrModel) => app.info?.models.find((m) => m.asr === id);
 
   /** Языки, которые чаще всего нужны; Whisper понимает и другие — их он определит сам. */
-  const codes = ["ru", "en", "uk", "be", "kk", "de", "fr", "es", "it", "pt", "pl", "tr", "zh", "ja", "ko"];
+  const whisper = ["ru", "en", "uk", "be", "kk", "de", "fr", "es", "it", "pt", "pl", "tr", "zh", "ja", "ko"];
+  /** Все языки Parakeet. */
+  const parakeet = ["ru", "en", "uk", "de", "fr", "es", "it", "pt", "pl", "bg", "cs", "da", "el", "et", "fi", "hr", "hu", "lt",
+    "lv", "mt", "nl", "ro", "sk", "sl", "sv"];
+  const codes = $derived(s.asr_model === "parakeet" ? parakeet : whisper);
   const languages = $derived.by(() => {
     const names = new Intl.DisplayNames([i18n.lang], { type: "language" });
     return codes.map((code) => {
@@ -19,6 +23,12 @@
       return { code, name: name[0].toUpperCase() + name.slice(1) };
     });
   });
+  /** Язык, которого нет у выбранной модели, она определяет сама. */
+  const language = $derived(codes.includes(s.speech_language) ? s.speech_language : "auto");
+  function pickLanguage(e: Event) {
+    s.speech_language = (e.currentTarget as HTMLSelectElement).value;
+    save();
+  }
 </script>
 
 <Group title={t("set.asr.model")} hint={t("set.asr.modelHint")} bare>
@@ -29,10 +39,10 @@
   ]} />
 </Group>
 
-{#if s.asr_model === "whisper-turbo"}
+{#if s.asr_model !== "gigaam"}
   <Group>
     <Row label={t("set.asr.language")} hint={t("set.asr.languageHint")}>
-      <select bind:value={s.speech_language} onchange={save}>
+      <select value={language} onchange={pickLanguage}>
         <option value="auto">{t("set.asr.auto")}</option>
         {#each languages as l (l.code)}<option value={l.code}>{l.name}</option>{/each}
       </select>

@@ -31,24 +31,41 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 pub fn relabel(app: &AppHandle) {
     if let Some(tray) = app.tray_by_id(TRAY) {
         let _ = tray.set_menu(menu(app).ok());
-        let _ = tray.set_tooltip(Some(app_name()));
+    }
+    if let Some(status) = app.try_state::<Arc<Status>>() {
+        status.relabel(app);
     }
 }
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
-    TrayIconBuilder::with_id(TRAY)
+    let tray = TrayIconBuilder::with_id(TRAY)
         // Отдельный одноцветный знак: у иконки приложения непрозрачный фон, шаблон из неё — сплошной квадрат.
         .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
         .icon_as_template(true)
-        .tooltip(app_name())
         .menu(&menu(app)?)
         .on_menu_event(|app, ev| match ev.id.as_ref() {
             "show" => show_window(app),
             "quit" => app.exit(0),
             _ => {}
-        })
-        .build(app)?;
+        });
+    // На macOS подсказку рисуем сами (см. hint.rs): системная у значка в фоне не появляется.
+    #[cfg(target_os = "macos")]
+    let tray = tray.on_tray_icon_event(crate::hint::on_tray_event);
+    #[cfg(not(target_os = "macos"))]
+    let tray = tray.tooltip(app_name());
+    tray.build(app)?;
+    show_status(app, app_name().into());
     Ok(())
+}
+
+/// Текст подсказки у значка: на macOS — своей (см. hint.rs), на других системах — системной.
+fn show_status(app: &AppHandle, text: String) {
+    #[cfg(target_os = "macos")]
+    let _ = app.run_on_main_thread(move || crate::hint::set_text(&text));
+    #[cfg(not(target_os = "macos"))]
+    if let Some(tray) = app.tray_by_id(TRAY) {
+        let _ = tray.set_tooltip(Some(text));
+    }
 }
 
 /// Крестик прячет окно и убирает приложение из дока; обработка идёт дальше.
@@ -88,12 +105,25 @@ pub struct Status {
 struct State {
     /// Запись в работе и имя её файла.
     current: Option<(String, String)>,
-    tooltip: String,
+    /// Что сейчас в подсказке у значка.
+    text: String,
 }
 
 impl Status {
     pub fn new(store: Arc<Store>) -> Self {
-        Self { store, state: Mutex::new(State { current: None, tooltip: app_name().into() }) }
+        Self { store, state: Mutex::new(State { current: None, text: app_name().into() }) }
+    }
+
+    /// Без задачи в подсказке название приложения — на новом языке; с задачей язык сменится со следующим событием.
+    fn relabel(&self, app: &AppHandle) {
+        let text = {
+            let mut st = self.state.lock().unwrap();
+            if st.current.is_none() {
+                st.text = app_name().into();
+            }
+            st.text.clone()
+        };
+        show_status(app, text);
     }
 
     pub fn update(&self, app: &AppHandle, ev: &Event) {
@@ -101,7 +131,7 @@ impl Status {
             return; // значок показывает только то, что уже в работе
         }
         // Под замком только решаем, что показать: трей и окно отвечают из главного потока.
-        let (tooltip, notice) = {
+        let (text, notice) = {
             let mut st = self.state.lock().unwrap();
             let started = st.current.as_ref().is_none_or(|(id, _)| *id != ev.recording_id);
             if started {
@@ -112,14 +142,14 @@ impl Status {
                 st.current = None;
             }
             let text = tooltip(&file, ev);
-            let changed = text != st.tooltip;
+            let changed = text != st.text;
             if changed {
-                st.tooltip.clone_from(&text);
+                st.text.clone_from(&text);
             }
             (changed.then_some(text), notice(&file, ev, started))
         };
-        if let (Some(text), Some(tray)) = (tooltip, app.tray_by_id(TRAY)) {
-            let _ = tray.set_tooltip(Some(text));
+        if let Some(text) = text {
+            show_status(app, text);
         }
         // Одна метка на запись: «готова» заменяет «началась» в Центре уведомлений.
         if let Some((title, body)) = notice.filter(|_| !in_front(app) && self.store.settings().notifications) {

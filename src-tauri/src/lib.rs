@@ -4,6 +4,8 @@ pub mod audio;
 pub mod diar;
 pub mod docx;
 pub mod exchange;
+#[cfg(target_os = "macos")]
+mod hint;
 pub mod lang;
 pub mod llm;
 pub mod local_llm;
@@ -456,7 +458,8 @@ pub fn run() {
                 app.on_menu_event(appmenu::on_event);
             }
             let handle = app.handle().clone();
-            let status = tray::Status::new(store.clone());
+            let status = Arc::new(tray::Status::new(store.clone()));
+            app.manage(status.clone());
             let svc = Service::start(store, Arc::new(move |signal| match signal {
                 Signal::Job(ev) => {
                     let _ = handle.emit("job", &ev);

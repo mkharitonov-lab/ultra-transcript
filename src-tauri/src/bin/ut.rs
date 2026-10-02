@@ -1,7 +1,7 @@
 //! CLI для проверки конвейера без интерфейса:
 //! `ut <файл> [--protocol] [--whisper|--parakeet] [--lang <язык>] [--diar off|pyannote3|community1|nemotron3] [--threshold <порог>] [--llm <модель>] [--raw] [--live]`.
 //! `--raw` — без предобработки звука (шумоподавления и выравнивания громкости);
-//! `--lang` — язык записи для Whisper (ru, en… или auto); `--live` — печатать текст по мере распознавания.
+//! `--lang` — язык записи для Whisper и Parakeet (ru, en… или auto); `--live` — печатать текст по мере распознавания.
 
 use std::sync::{mpsc, Arc};
 use ultra_transcript_lib::pipeline::Live;

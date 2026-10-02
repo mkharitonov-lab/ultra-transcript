@@ -19,7 +19,6 @@
 
   let tr = $state<Transcript | null>(null);
   let tab = $state<"transcript" | "protocol">("transcript");
-  let mode = $state<"clean" | "text">("clean");
   let people = $state<Person[]>([]);
   let picking = $state<string | null>(null);
   let query = $state("");
@@ -107,8 +106,8 @@
 
   function editText(u: Utterance, el: HTMLElement) {
     const value = el.innerText.trim();
-    if (u[mode] === value) return;
-    u[mode] = value;
+    if (shown(u) === value) return;
+    u.clean = value;
     save();
   }
 
@@ -163,9 +162,12 @@
     ...(s.person_id ? [{ label: t("rec.resetPerson"), icon: "x", action: () => assign(s.id, null, "") }] : []),
   ];
 
+  /** Текст реплики после редактуры; без LLM — как распознан. */
+  const shown = (u: Utterance) => u.clean || u.text;
+
   const utteranceMenu = (u: Utterance): MenuItem[] => [
     { label: t("rec.playFrom"), icon: "play", hint: fmtTime(u.start), action: () => seek(u.start) },
-    { label: t("rec.copyUtterance"), icon: "copy", action: () => copyText(u[mode] || u.text).catch(showError) },
+    { label: t("rec.copyUtterance"), icon: "copy", action: () => copyText(shown(u)).catch(showError) },
     ...(tr && tr.speakers.length > 1 && !busy
       ? [{
           label: t("rec.speaker"), icon: "people",
@@ -176,9 +178,9 @@
 
   const exportMenu = (): MenuItem[] => [
     { heading: t(kind === "protocol" ? "export.protocol" : "export.transcript") },
-    { label: t("export.copy"), icon: "copy", action: () => copyDoc(recording, kind, mode === "text") },
+    { label: t("export.copy"), icon: "copy", action: () => copyDoc(recording, kind) },
     { separator: true },
-    { label: t("export.saveMd"), icon: "doc", action: () => exportFile(recording, kind, "md", "save", mode === "text") },
+    { label: t("export.saveMd"), icon: "doc", action: () => exportFile(recording, kind, "md", "save") },
     { label: t("export.saveDocx"), icon: "doc", action: () => exportFile(recording, kind, "docx", "save") },
     { separator: true },
     { label: t("export.openDocx"), icon: "reveal", action: () => exportFile(recording, kind, "docx", "open") },
@@ -243,11 +245,6 @@
             {/if}
           </div>
         {/each}
-        <div class="spacer"></div>
-        <Segmented small bind:value={mode} options={[
-          { value: "clean", label: t("rec.clean"), title: t("rec.cleanHint") },
-          { value: "text", label: t("rec.verbatim"), title: t("rec.verbatimHint") },
-        ]} />
       </div>
     {/if}
   </header>
@@ -295,10 +292,10 @@
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div class="line" oncontextmenu={(e) => openMenu(e, [...textItems(e), { separator: true }, ...utteranceMenu(u)])}>
             <button class="ts" onclick={() => seek(u.start)} title={t("rec.playFrom")}>{fmtTime(u.start)}</button>
-            {#key `${mode}${job?.drafts ?? 0}`}
+            {#key job?.drafts ?? 0}
               <div class="text" contenteditable={busy ? "false" : "plaintext-only"} spellcheck="false"
                 onblur={(e) => editText(u, e.currentTarget)}
-                onkeydown={(e) => { if (e.key === "Escape") e.currentTarget.blur(); }}>{u[mode] || u.text}</div>
+                onkeydown={(e) => { if (e.key === "Escape") e.currentTarget.blur(); }}>{shown(u)}</div>
             {/key}
           </div>
         </div>
@@ -372,7 +369,6 @@
   .meta { margin-top: 2px; font-size: var(--fs-sm); }
 
   .speakers { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; }
-  .spacer { flex: 1; }
   .chip-wrap { position: relative; }
   .chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 14px; padding: 3px 10px; }
   .chip:disabled { opacity: 1; }
@@ -416,7 +412,7 @@
   }
   .ts:hover { color: var(--accent); background: transparent; }
   .text {
-    flex: 1; font-size: 14.5px; line-height: 1.6; outline: none; border-radius: 4px; max-width: 760px;
+    flex: 1; font-size: 14.5px; line-height: 1.6; outline: none; border-radius: 4px; max-width: 760px; white-space: pre-wrap;
     user-select: text; -webkit-user-select: text; cursor: text;
   }
   .text:focus { background: var(--bg-card); box-shadow: 0 0 0 4px var(--bg-card); }

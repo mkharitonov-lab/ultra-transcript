@@ -17,7 +17,8 @@ minutes with decisions and action items. It runs on your own computer: recording
   is recognized in future recordings.
 - **Spells terms and names correctly.** Add names, abbreviations and surnames to the glossary
   and they are written the way you need.
-- **Removes filler words.** Next to the verbatim text there is a clean one that is easy to read and share.
+- **Turns speech into written text.** The AI assistant fixes recognition errors, removes filler words
+  and backchannels, adds punctuation and splits the text into paragraphs — easy to read and share.
 - **Writes minutes.** The AI assistant collects the agenda, decisions and action items with owners
   and due dates, using your template.
 - **Saves to Markdown and Word.** Markdown is handy for AI tools and notes, Word for sending to colleagues.

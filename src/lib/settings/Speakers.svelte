@@ -24,11 +24,11 @@
   }
 
   const engines = $derived([
-    { value: "pyannote3" as DiarModel, title: t("set.diar.pyannote"), about: t("set.diar.pyannoteAbout"), model: model("pyannote3") },
-    { value: "community1" as DiarModel, title: t("set.diar.community"), about: t("set.diar.communityAbout"), model: model("community1") },
+    { value: "pyannote3" as DiarModel, title: t("set.diar.pyannote"), model: model("pyannote3") },
+    { value: "community1" as DiarModel, title: t("set.diar.community"), model: model("community1") },
     // Nemotron 3 требует отдельно собранной библиотеки — без неё вариант не показываем.
     ...(app.info?.nemotron_runtime
-      ? [{ value: "nemotron3" as DiarModel, title: t("set.diar.nemotron"), about: t("set.diar.nemotronAbout"), model: model("nemotron3") }]
+      ? [{ value: "nemotron3" as DiarModel, title: t("set.diar.nemotron"), model: model("nemotron3") }]
       : []),
   ]);
 </script>

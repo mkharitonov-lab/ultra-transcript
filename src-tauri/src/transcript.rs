@@ -71,7 +71,7 @@ impl Transcript {
         self.utterances
             .iter()
             .map(|u| {
-                let t = if clean { &u.clean } else { &u.text };
+                let t = if clean && !u.clean.is_empty() { &u.clean } else { &u.text };
                 format!("{}: {}", self.speaker_name(&u.speaker), t)
             })
             .collect::<Vec<_>>()

@@ -47,7 +47,7 @@
 
     {#if s.llm_provider === "builtin"}
       <ModelChoice bind:value={s.llm_local_model} onchange={changed} options={llms.map((m) => ({
-        value: m.name, title: m.title, about: m.about, model: m,
+        value: m.name, title: m.title, model: m,
         badge: m.name === "gigachat-lightning" ? t("common.recommended") : m.name === "qwen3-4b" ? t("set.llm.light") : undefined,
       }))} />
     {:else}

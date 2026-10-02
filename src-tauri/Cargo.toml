@@ -69,8 +69,15 @@ strip = true
 [target.'cfg(target_os = "macos")'.dependencies]
 llama-cpp-2 = { version = "0.1.157", default-features = false, features = ["metal", "common"] }
 # Уведомления через системный UserNotifications: запрос разрешения, щелчок по уведомлению.
+# Своя подсказка у значка в строке меню (AppKit): системная не появляется, когда приложение в фоне.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSError", "NSObject", "NSString"] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std", "block2", "NSBundle", "NSDate", "NSError", "NSGeometry", "NSObject", "NSString", "NSTimer",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std", "NSButton", "NSColor", "NSControl", "NSFont", "NSGraphics", "NSPanel", "NSResponder", "NSScreen",
+  "NSStatusBarButton", "NSStatusItem", "NSText", "NSTextField", "NSView", "NSVisualEffectView", "NSWindow",
+] }
 objc2-user-notifications = { version = "0.3", default-features = false, features = [
   "std", "bitflags", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest",
   "UNNotificationResponse", "UNNotificationTrigger", "UNUserNotificationCenter",

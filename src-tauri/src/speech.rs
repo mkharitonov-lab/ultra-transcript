@@ -38,15 +38,17 @@ impl AsrModel {
         }
     }
 
-    /// Язык, на котором модель распознаёт: GigaAM — только русский, Whisper — заданный
-    /// (`language`) или, если задано "auto", определяет сам — тогда здесь пусто.
-    /// Parakeet язык не задаётся — всегда определяет сама.
+    /// Язык, на котором модель распознаёт: GigaAM — только русский, Whisper и Parakeet — заданный
+    /// (`language`) или, если задано "auto", определяют сами — тогда здесь пусто.
+    /// Parakeet язык напрямую не задаётся: фрагменты не на том языке она распознаёт повторно
+    /// (см. `Engines::fix_language`).
     pub fn language(self, language: &str) -> String {
+        let language = language.trim().to_lowercase();
         match self {
             Self::Gigaam => "ru".into(),
-            Self::Parakeet => String::new(),
-            Self::WhisperTurbo if language == "auto" => String::new(),
-            Self::WhisperTurbo => language.trim().to_lowercase(),
+            _ if language == "auto" => String::new(),
+            Self::Parakeet if !PARAKEET_LANGUAGES.contains(&language.as_str()) => String::new(),
+            _ => language,
         }
     }
 
@@ -92,6 +94,12 @@ impl AsrModel {
         rc
     }
 }
+
+/// Языки Parakeet TDT 0.6B v3.
+pub const PARAKEET_LANGUAGES: [&str; 25] = [
+    "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu", "it", "lt", "lv", "mt", "nl", "pl", "pt",
+    "ro", "ru", "sk", "sl", "sv", "uk",
+];
 
 pub struct Word {
     pub text: String,
@@ -172,34 +180,98 @@ impl Engines {
         regions: &[(usize, Vec<f32>)],
         mut progress: impl FnMut(f32, &[Segment]),
     ) -> Vec<Segment> {
+        let sr = SAMPLE_RATE as f32;
         let mut segments = Vec::with_capacity(regions.len());
+        // Фрагменты не на том языке, для которых ещё не нашлось подсказки.
+        let mut pending = vec![];
         for (i, batch) in regions.chunks(8).enumerate() {
-            let streams: Vec<_> = batch
-                .iter()
-                .map(|(_, s)| {
-                    let st = self.recognizer.create_stream();
-                    st.accept_waveform(SAMPLE_RATE, s);
-                    st
-                })
-                .collect();
-            self.recognizer
-                .decode_multiple_streams(&streams.iter().collect::<Vec<_>>());
-            for ((start, s), st) in batch.iter().zip(&streams) {
-                let offset = *start as f32 / SAMPLE_RATE as f32;
-                let end = offset + s.len() as f32 / SAMPLE_RATE as f32;
-                let words = st
-                    .get_result()
-                    .map(|r| match self.asr {
-                        AsrModel::Gigaam | AsrModel::Parakeet => tokens_to_words(&r.tokens, r.timestamps.as_deref(), offset, end),
-                        AsrModel::WhisperTurbo => text_to_words(&r.text, offset, end),
-                    })
-                    .unwrap_or_default();
-                segments.push(Segment { start: offset, end, words });
+            let first = segments.len();
+            let clips: Vec<_> = batch.iter().map(|(start, s)| (*start as f32 / sr, s.as_slice())).collect();
+            for ((offset, s), words) in clips.iter().zip(self.decode(&clips)) {
+                segments.push(Segment { start: *offset, end: offset + s.len() as f32 / sr, words });
             }
+            pending.extend(first..segments.len());
+            pending = self.fix_language(regions, &mut segments, pending);
             let done = ((i + 1) * 8).min(regions.len());
-            progress(done as f32 / regions.len().max(1) as f32, &segments[segments.len() - batch.len()..]);
+            progress(done as f32 / regions.len().max(1) as f32, &segments[first..]);
         }
         segments
+    }
+
+    /// Распознаёт отрывки разом; у каждого — его начало в записи, с него отсчитываются таймкоды слов.
+    fn decode(&self, clips: &[(f32, &[f32])]) -> Vec<Vec<Word>> {
+        let streams: Vec<_> = clips
+            .iter()
+            .map(|(_, s)| {
+                let st = self.recognizer.create_stream();
+                st.accept_waveform(SAMPLE_RATE, s);
+                st
+            })
+            .collect();
+        self.recognizer.decode_multiple_streams(&streams.iter().collect::<Vec<_>>());
+        clips
+            .iter()
+            .zip(&streams)
+            .map(|((offset, s), st)| {
+                let end = offset + s.len() as f32 / SAMPLE_RATE as f32;
+                st.get_result()
+                    .map(|r| match self.asr {
+                        AsrModel::Gigaam | AsrModel::Parakeet => tokens_to_words(&r.tokens, r.timestamps.as_deref(), *offset, end),
+                        AsrModel::WhisperTurbo => text_to_words(&r.text, *offset, end),
+                    })
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// Parakeet язык не задаётся, и на коротких фрагментах — «угу», «да», обрывки фраз — она
+    /// иногда сбивается на другой: русская речь выходит английскими словами. Такие фрагменты
+    /// (`pending` — их номера; слова не той азбуки) распознаём заново, добавив после них
+    /// несколько секунд речи из той же записи, уже распознанной на нужном языке: по ней модель
+    /// и определяет язык. Подсказка перед фрагментом хуже: короткий фрагмент после неё модель
+    /// чаще пропускает целиком. Новый текст берём, если в нём меньше чужих слов.
+    /// Возвращает фрагменты, для которых подсказки пока нет.
+    fn fix_language(&self, regions: &[(usize, Vec<f32>)], segments: &mut [Segment], pending: Vec<usize>) -> Vec<usize> {
+        let Some(native) = alphabet(&self.language).filter(|_| self.asr == AsrModel::Parakeet) else {
+            return vec![];
+        };
+        let pending: Vec<usize> = pending.into_iter().filter(|&k| foreign_words(&segments[k].words, native) > 0).collect();
+        // Подсказка — фрагмент целиком на нужном языке, не короче 4 слов.
+        let hints: Vec<usize> = (0..segments.len())
+            .filter(|&j| segments[j].words.len() >= 4 && foreign_words(&segments[j].words, native) == 0)
+            .collect();
+        if hints.is_empty() {
+            return pending;
+        }
+        const HINT_SECONDS: f32 = 6.0;
+        const GAP_SECONDS: f32 = 0.3;
+        let sr = SAMPLE_RATE as f32;
+        let clips: Vec<(usize, Vec<f32>)> = pending
+            .iter()
+            .map(|&k| {
+                let j = *hints.iter().min_by_key(|&&j| j.abs_diff(k)).unwrap();
+                let hint = &segments[j];
+                // Подсказку режем на границе слова.
+                let cut = hint.words.iter().map(|w| w.start - hint.start).find(|&t| t > HINT_SECONDS).unwrap_or(f32::MAX);
+                let hint_audio = &regions[j].1[..((cut * sr) as usize).min(regions[j].1.len())];
+                let gap = vec![0.0; (GAP_SECONDS * sr) as usize];
+                (k, [&regions[k].1, &gap, hint_audio].concat())
+            })
+            .collect();
+        let decoded = self.decode(&clips.iter().map(|(k, a)| (segments[*k].start, a.as_slice())).collect::<Vec<_>>());
+        for ((k, _), words) in clips.iter().zip(decoded) {
+            let seg = &mut segments[*k];
+            // Слова подсказки отбрасываем.
+            let mut words: Vec<Word> = words.into_iter().filter(|w| w.start < seg.end + GAP_SECONDS / 2.0).collect();
+            if foreign_words(&words, native) < foreign_words(&seg.words, native) {
+                for w in &mut words {
+                    w.end = w.end.min(seg.end);
+                    w.start = w.start.min(w.end);
+                }
+                seg.words = words;
+            }
+        }
+        vec![]
     }
 
     /// L2-нормированный голосовой эмбеддинг фрагмента.
@@ -345,12 +417,31 @@ fn is_hallucination(text: &str) -> bool {
     t.is_empty() || (t.chars().count() < 80 && PHRASES.iter().any(|p| t.contains(p)))
 }
 
-/// Токены SentencePiece ("▁" = начало слова) → слова с таймкодами.
+/// Азбука языка: кириллица, греческий или латиница. None — язык не задан.
+fn alphabet(language: &str) -> Option<fn(char) -> bool> {
+    let f: fn(char) -> bool = match language {
+        "" => return None,
+        "ru" | "uk" | "be" | "bg" | "kk" | "sr" | "mk" => |c| ('\u{400}'..='\u{52F}').contains(&c),
+        "el" => |c| ('\u{370}'..='\u{3FF}').contains(&c) || ('\u{1F00}'..='\u{1FFF}').contains(&c),
+        _ => |c| c.is_ascii_alphabetic() || ('\u{C0}'..='\u{24F}').contains(&c),
+    };
+    Some(f)
+}
+
+/// Сколько слов написано не азбукой языка (числа и знаки не в счёт).
+fn foreign_words(words: &[Word], native: fn(char) -> bool) -> usize {
+    words
+        .iter()
+        .filter(|w| w.text.chars().any(char::is_alphabetic) && !w.text.chars().any(native))
+        .count()
+}
+
+/// Токены SentencePiece ("▁" = начало слова; у Parakeet — пробел) → слова с таймкодами.
 fn tokens_to_words(tokens: &[String], ts: Option<&[f32]>, offset: f32, end: f32) -> Vec<Word> {
     let mut words: Vec<Word> = vec![];
     for (i, tok) in tokens.iter().enumerate() {
         let t = offset + ts.and_then(|t| t.get(i)).copied().unwrap_or(0.0);
-        match (tok.strip_prefix('▁'), words.last_mut()) {
+        match (tok.strip_prefix(['▁', ' ']), words.last_mut()) {
             (Some(rest), _) => words.push(Word { text: rest.to_string(), start: t, end: t }),
             (None, Some(last)) => last.text.push_str(tok),
             (None, None) => words.push(Word { text: tok.clone(), start: t, end: t }),
@@ -361,4 +452,37 @@ fn tokens_to_words(tokens: &[String], ts: Option<&[f32]>, offset: f32, end: f32)
         words[i].end = words.get(i + 1).map(|n| n.start).unwrap_or(end);
     }
     words
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parakeet_tokens_start_words_with_a_space() {
+        let tokens: Vec<String> = [" Я", " мо", "гу", " копи", " паст."].map(String::from).into();
+        let words = tokens_to_words(&tokens, Some(&[0.0, 0.2, 0.3, 0.5, 0.8]), 10.0, 11.5);
+        let texts: Vec<_> = words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(texts, ["Я", "могу", "копи", "паст."]);
+        assert_eq!((words[1].start, words[1].end, words[3].end), (10.2, 10.5, 11.5));
+    }
+
+    #[test]
+    fn counts_words_in_a_foreign_alphabet() {
+        let words = |s: &str| s.split(' ').map(|w| Word { text: w.into(), start: 0.0, end: 0.0 }).collect::<Vec<_>>();
+        let ru = alphabet("ru").unwrap();
+        assert_eq!(foreign_words(&words("That needs по стандарту, 7 штук."), ru), 2);
+        assert_eq!(foreign_words(&words("Это раз, 2 — три."), ru), 0);
+        assert_eq!(foreign_words(&words("Это the end"), alphabet("en").unwrap()), 1);
+        assert!(alphabet("").is_none());
+    }
+
+    #[test]
+    fn parakeet_takes_only_its_languages() {
+        assert_eq!(AsrModel::Parakeet.language("RU"), "ru");
+        assert_eq!(AsrModel::Parakeet.language("zh"), "");
+        assert_eq!(AsrModel::Parakeet.language("auto"), "");
+        assert_eq!(AsrModel::WhisperTurbo.language("zh"), "zh");
+        assert_eq!(AsrModel::Gigaam.language("en"), "ru");
+    }
 }
