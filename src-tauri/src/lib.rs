@@ -14,6 +14,7 @@ pub mod media;
 pub mod models;
 mod notify;
 pub mod pipeline;
+pub mod record;
 pub mod service;
 pub mod speech;
 pub mod store;
@@ -129,13 +130,19 @@ fn retry(svc: Svc, id: String, asr: Option<AsrModel>, diar: Option<diar::DiarMod
 
 #[tauri::command]
 fn delete_recording(svc: Svc, id: String) -> R<()> {
+    if svc.recording().as_deref() == Some(id.as_str()) {
+        return Err(tr("сначала остановите запись", "stop the recording first").into());
+    }
     svc.store.delete_recording(&id).map_err(e)
 }
 
 #[tauri::command]
 fn rename_recording(svc: Svc, id: String, title: String) -> R<()> {
     svc.store.rename_recording(&id, &title).map_err(e)?;
-    svc.enqueue(Job::Export { id });
+    // Файлы пересобираются, когда есть что пересобирать: у идущей записи расшифровки ещё нет.
+    if svc.store.load_transcript(&id).is_ok() {
+        svc.enqueue(Job::Export { id });
+    }
     Ok(())
 }
 
@@ -181,10 +188,30 @@ fn get_transcript(svc: Svc, id: String) -> R<Transcript> {
     svc.store.load_transcript(&id).map_err(e)
 }
 
-/// Задача, которая сейчас в работе, и всё, что она успела показать.
+/// Что сейчас в работе (задача очереди, запись с микрофона) и всё, что успело показаться.
 #[tauri::command]
-fn live(svc: Svc) -> Option<service::LiveState> {
+fn live(svc: Svc) -> Vec<service::LiveState> {
     svc.live()
+}
+
+// ---------- запись с микрофона ----------
+
+/// Начинает запись; микрофон открывается до ответа, так что без него — ошибка сразу.
+#[tauri::command]
+async fn start_recording(svc: Svc<'_>) -> R<String> {
+    let svc = svc.inner().clone();
+    blocking(move || svc.start_recording()).await
+}
+
+/// Останавливает запись: `keep` — сохранить и расшифровать, иначе удалить.
+#[tauri::command]
+fn stop_recording(svc: Svc, id: String, keep: bool) -> R<()> {
+    svc.stop_recording(&id, keep).map_err(e)
+}
+
+#[tauri::command]
+async fn input_devices() -> R<Vec<String>> {
+    blocking(|| Ok(record::input_devices())).await
 }
 
 /// Сохраняет правки и пересобирает файлы экспорта.
@@ -468,6 +495,9 @@ pub fn run() {
                 Signal::Live(ev) => {
                     let _ = handle.emit("live", &ev);
                 }
+                Signal::Record(ev) => {
+                    let _ = handle.emit("record", &ev);
+                }
             }), true);
             app.manage(svc);
             Ok(())
@@ -482,6 +512,7 @@ pub fn run() {
             app_info, legal, install_models, list_recordings, import_files, retry, delete_recording,
             rename_recording, archive_recordings, move_recordings, list_folders, save_folder, delete_folder,
             search, stats, get_transcript, live, save_transcript, assign_speaker, make_protocol,
+            start_recording, stop_recording, input_devices,
             export_file, export_text, clipboard_text,
             list_terms, save_term, delete_term, list_people, save_person, delete_person,
             pending_counts, export_directory, import_directory, list_voices, add_voice, delete_voice,

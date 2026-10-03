@@ -173,6 +173,11 @@ impl Engines {
         self.voice.speech_regions(samples)
     }
 
+    /// Поиск речи для потока: фразы между паузами достаются по мере поступления звука.
+    pub fn vad(&self) -> Result<VoiceActivityDetector> {
+        self.voice.vad()
+    }
+
     /// Распознаёт фрагменты пачками; после каждой пачки `progress` получает долю выполненного
     /// и только что распознанные фрагменты — их можно показывать, не дожидаясь конца.
     pub fn recognize(
@@ -200,6 +205,10 @@ impl Engines {
 
     /// Распознаёт отрывки разом; у каждого — его начало в записи, с него отсчитываются таймкоды слов.
     fn decode(&self, clips: &[(f32, &[f32])]) -> Vec<Vec<Word>> {
+        // sherpa-onnx на пустой пачке разыменовывает нулевой указатель и роняет процесс.
+        if clips.is_empty() {
+            return vec![];
+        }
         let streams: Vec<_> = clips
             .iter()
             .map(|(_, s)| {
@@ -240,7 +249,7 @@ impl Engines {
         let hints: Vec<usize> = (0..segments.len())
             .filter(|&j| segments[j].words.len() >= 4 && foreign_words(&segments[j].words, native) == 0)
             .collect();
-        if hints.is_empty() {
+        if pending.is_empty() || hints.is_empty() {
             return pending;
         }
         const HINT_SECONDS: f32 = 6.0;
@@ -309,10 +318,14 @@ impl VoicePrinter {
         Ok(Self { vad, embedder })
     }
 
+    fn vad(&self) -> Result<VoiceActivityDetector> {
+        VoiceActivityDetector::create(&self.vad, 60.0)
+            .ok_or_else(|| anyhow!(tr("не удалось загрузить модель поиска речи", "could not load the speech detection model")))
+    }
+
     /// Режет запись на фрагменты речи по паузам.
     pub fn speech_regions(&self, samples: &[f32]) -> Result<Vec<(usize, Vec<f32>)>> {
-        let vad = VoiceActivityDetector::create(&self.vad, 60.0)
-            .ok_or_else(|| anyhow!(tr("не удалось загрузить модель поиска речи", "could not load the speech detection model")))?;
+        let vad = self.vad()?;
         let mut out = vec![];
         let mut drain = |vad: &VoiceActivityDetector| {
             while !vad.is_empty() {

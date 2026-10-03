@@ -4,6 +4,7 @@
   import { api, type Stats } from "./api";
   import { fmtDuration, fmtSize, t, tn, type Key } from "./i18n.svelte";
   import { models, ready, starter } from "./models.svelte";
+  import { startRecording } from "./recordings";
   import { app, type SettingsSection } from "./state.svelte";
   import Progress from "./ui/Progress.svelte";
 
@@ -43,6 +44,7 @@
   const keys: { keys: string[]; text: Key }[] = [
     { keys: ["Space"], text: "keys.play" },
     { keys: ["⌘", "K"], text: "keys.search" },
+    { keys: ["⌘", "R"], text: "keys.record" },
     { keys: ["⌘", "O"], text: "keys.add" },
     { keys: ["⌘", ","], text: "keys.settings" },
     { keys: ["↑", "↓"], text: "keys.list" },
@@ -80,11 +82,18 @@
         <p class="faint small">{t("welcome.modelsNote")}</p>
       </section>
     {:else}
-      <button class="drop" onclick={onadd}>
-        <Icon name="wave" size={40} />
-        <span class="big-text">{t("welcome.drop")}</span>
-        <span class="muted">{t("welcome.dropHint")}</span>
-      </button>
+      <div class="start">
+        <button class="card record" onclick={startRecording}>
+          <span class="ico"><Icon name="mic" size={22} /></span>
+          <span class="big-text">{t("welcome.record")}</span>
+          <span class="muted">{t("welcome.recordHint")}</span>
+        </button>
+        <button class="card drop" onclick={onadd}>
+          <span class="ico plain"><Icon name="wave" size={22} /></span>
+          <span class="big-text">{t("welcome.drop")}</span>
+          <span class="muted">{t("welcome.dropHint")}</span>
+        </button>
+      </div>
     {/if}
 
     {#if stats && stats.recordings > 0}
@@ -149,13 +158,21 @@
   .models li.ok :global(svg) { color: var(--ok); }
   .small { font-size: var(--fs-sm); }
 
-  .drop {
-    display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 34px 20px; white-space: normal;
-    border: 1.5px dashed var(--border-strong); border-radius: var(--r-xl); background: transparent; color: var(--fg-muted);
-    transition: border-color 0.15s, background 0.15s, color 0.15s;
+  .start { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .card {
+    display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 26px 20px; white-space: normal;
+    border-radius: var(--r-xl); color: var(--fg-muted); transition: border-color 0.15s, background 0.15s, color 0.15s;
   }
+  .card .ico {
+    width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; margin-bottom: 4px;
+    background: var(--danger); color: #fff;
+  }
+  .card .ico.plain { background: var(--bg-selected); color: var(--accent); }
+  .record { border: 1px solid var(--border); background: var(--bg-card); }
+  .record:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 6%, var(--bg-card)); }
+  .drop { border: 1.5px dashed var(--border-strong); background: transparent; }
   .drop:hover { border-color: var(--accent); color: var(--accent); background: var(--bg-selected); }
-  .big-text { font-size: 17px; font-weight: 600; color: var(--fg); }
+  .big-text { font-size: 16px; font-weight: 600; color: var(--fg); }
 
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
   .stats div { border: 1px solid var(--border); border-radius: var(--r-lg); padding: 10px 14px; display: flex; flex-direction: column; }
@@ -181,5 +198,5 @@
   .keys { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 24px; }
   .keys div { display: flex; align-items: center; gap: 10px; }
   .combo { display: inline-flex; gap: 3px; min-width: 74px; }
-  @media (max-width: 1020px) { .tips, .keys { grid-template-columns: 1fr; } .stats { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 1020px) { .tips, .keys, .start { grid-template-columns: 1fr; } .stats { grid-template-columns: repeat(2, 1fr); } }
 </style>

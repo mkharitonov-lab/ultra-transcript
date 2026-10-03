@@ -26,7 +26,7 @@ const settings: Settings = {
   llm_base_url: "http://localhost:11434/v1", llm_model: "qwen3:8b", llm_api_key: "",
   diar_model: "pyannote3", cluster_threshold: 0.4, voice_threshold: 0.55, archive_kbps: 24,
   auto_accept_suggestions: false, transcript_template: "", protocol_template: "",
-  theme: "system", language: "system", notifications: true, developer_mode: false,
+  theme: "system", language: "system", notifications: true, developer_mode: false, input_device: "",
 };
 
 // `?fresh` в адресе — первый запуск: модели ещё не скачаны, библиотека пуста.
@@ -141,7 +141,7 @@ let liveState: LiveState | null = null;
 function job(id: string, kind: JobKind, status: JobEvent["status"], stage = "", title = "", progress = 0, message = "") {
   if (status === "processing") {
     if (liveState?.recording_id === id && liveState.job === kind) Object.assign(liveState, { stage, title, progress });
-    else liveState = { recording_id: id, job: kind, stage, title, progress, lines: [], drafts: 0, protocol: "" };
+    else liveState = { recording_id: id, job: kind, stage, title, progress, lines: [], drafts: 0, protocol: "", seconds: 0 };
   } else if (liveState?.recording_id === id) liveState = null;
   return emit("job", { recording_id: id, job: kind, status, stage, title, progress, message } satisfies JobEvent);
 }
@@ -152,6 +152,36 @@ function live(e: LiveEvent) {
     else liveState.protocol = e.reset ? e.text : liveState.protocol + e.text;
   }
   return emit("live", e);
+}
+
+/** Запись с микрофона: таймер и громкость, фразы раз в несколько секунд — пока не остановят. */
+let recorder: { id: string; stop: boolean; keep: boolean } | null = null;
+async function record(r: Recording) {
+  recorder = { id: r.id, stop: false, keep: true };
+  await job(r.id, "record", "processing", "load", l("Загрузка моделей", "Loading models"));
+  await sleep(1200);
+  await job(r.id, "record", "processing", "record", l("Запись", "Recording"));
+  const phrases = lines.map((x) => x[2]);
+  let seconds = 0, next = 0;
+  while (!recorder.stop) {
+    await sleep(200);
+    seconds += 0.2;
+    const peak = 0.05 + Math.random() * 0.5 * (Math.sin(seconds * 1.7) + 1);
+    await emit("record", { recording_id: r.id, seconds, peak });
+    if (seconds > next * 5 + 3 && next < phrases.length) {
+      await live({ recording_id: r.id, kind: "text", start: next * 5, text: phrases[next] });
+      next++;
+    }
+  }
+  const keep = recorder.keep;
+  recorder = null;
+  if (!keep) {
+    recordings = recordings.filter((x) => x.id !== r.id);
+    return job(r.id, "record", "done", "", "", 1);
+  }
+  r.status = "queued";
+  await job(r.id, "record", "done", "", "", 1);
+  await transcribe(r);
 }
 async function stage(id: string, kind: JobKind, code: string, title: string, steps: number, each?: (i: number) => unknown) {
   await job(id, kind, "processing", code, title, 0);
@@ -265,7 +295,23 @@ const commands: Record<string, (a: Args) => unknown> = {
     if (!r || (!transcripts[a.id] && r.status !== "done")) throw l("расшифровка ещё не готова", "the transcript is not ready yet");
     return transcriptOf(a.id);
   },
-  live: () => liveState,
+  live: () => (liveState ? [liveState] : []),
+  start_recording: () => {
+    if (recorder) throw l("запись уже идёт", "a recording is already in progress");
+    const now = new Date();
+    const stampNow = stamp(0, now.toTimeString().slice(0, 5));
+    const title = `${l("Запись", "Recording")} ${stampNow.slice(8, 10)}.${stampNow.slice(5, 7)}.${stampNow.slice(0, 4)} ${stampNow.slice(11)}`;
+    const r = rec(`n${++seq}`, title, 0, 0, { status: "recording", created_at: stampNow, source: `/Users/demo/Library/recordings/n${seq}/capture.wav` });
+    recordings = [r, ...recordings];
+    void record(recordings[0]);
+    return r.id;
+  },
+  stop_recording: (a) => {
+    if (!recorder || recorder.id !== a.id) throw l("запись уже остановлена", "the recording has already stopped");
+    recorder.keep = a.keep;
+    recorder.stop = true;
+  },
+  input_devices: () => ["MacBook Pro Microphone", "AirPods Pro", "Scarlett 2i2 USB"],
   save_transcript: (a) => void (transcripts[a.transcript.id] = a.transcript),
   assign_speaker: (a) => {
     const t = transcriptOf(a.id);

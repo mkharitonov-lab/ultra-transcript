@@ -82,6 +82,7 @@ pub fn match_system_dialogs(app_id: &str) {
 pub enum Stage {
     Queue,
     LoadModels,
+    Record,
     Prepare,
     Denoise,
     Recognize,
@@ -100,6 +101,7 @@ impl Stage {
         match self {
             Self::Queue => "",
             Self::LoadModels => "load",
+            Self::Record => "record",
             Self::Prepare => "prepare",
             Self::Denoise => "denoise",
             Self::Recognize => "recognize",
@@ -118,6 +120,7 @@ impl Stage {
         match self {
             Self::Queue => "",
             Self::LoadModels => tr("Загрузка моделей", "Loading models"),
+            Self::Record => tr("Запись", "Recording"),
             Self::Prepare => tr("Подготовка аудио", "Preparing audio"),
             Self::Denoise => tr("Шумоподавление", "Reducing noise"),
             Self::Recognize => tr("Распознавание речи", "Recognizing speech"),

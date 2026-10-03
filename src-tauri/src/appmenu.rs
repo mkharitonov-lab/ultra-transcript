@@ -1,5 +1,5 @@
-//! Строка меню приложения (macOS) на языке интерфейса. Пункты «Настройки», «Добавить файлы»
-//! и «Новая папка» выполняет окно: ему уходит событие `menu` с названием пункта.
+//! Строка меню приложения (macOS) на языке интерфейса. Пункты «Настройки», «Записать»,
+//! «Добавить файлы» и «Новая папка» выполняет окно: ему уходит событие `menu` с названием пункта.
 
 use crate::lang::tr;
 use crate::tray::{app_name, show_window};
@@ -7,8 +7,13 @@ use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Wry};
 
 /// Пункты, которые выполняет окно: (идентификатор, событие для окна).
-const ACTIONS: [(&str, &str); 4] =
-    [("menu-about", "about"), ("menu-settings", "settings"), ("menu-add", "add"), ("menu-folder", "folder")];
+const ACTIONS: [(&str, &str); 5] = [
+    ("menu-about", "about"),
+    ("menu-settings", "settings"),
+    ("menu-record", "record"),
+    ("menu-add", "add"),
+    ("menu-folder", "folder"),
+];
 
 fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let name = app_name();
@@ -37,6 +42,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         tr("Файл", "File"),
         true,
         &[
+            &item("menu-record", tr("Записать", "Record").into(), Some("CmdOrCtrl+R"))?,
             &item("menu-add", tr("Добавить файлы…", "Add Files…").into(), Some("CmdOrCtrl+O"))?,
             &item("menu-folder", tr("Новая папка…", "New Folder…").into(), Some("CmdOrCtrl+Shift+N"))?,
             &line()?,

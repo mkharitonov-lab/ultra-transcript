@@ -50,7 +50,11 @@ pub fn transcribe(
     report.stage(Stage::Prepare, 0.0);
     let samples = media::decode(input)?;
     let duration = samples.len() as f32 / media::SAMPLE_RATE as f32;
-    media::encode_archive(input, &dir.join("audio.ogg"), settings.archive_kbps)?;
+    // Запись с микрофона после обработки хранится только в архиве: тогда он и есть источник.
+    let archive = dir.join("audio.ogg");
+    if !same_file(input, &archive) {
+        media::encode_archive(input, &archive, settings.archive_kbps)?;
+    }
     let prepared =
         audio::for_recognition(&samples, &settings, &store.models_dir(), &|f| report.stage(Stage::Denoise, f), &mut warnings);
     // Обработанный звук — для плеера; архив остаётся исходным. Без копии плеер играет архив.
@@ -133,6 +137,13 @@ pub fn transcribe(
     }
     store.save_transcript(&t)?;
     Ok((t, warnings))
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// Язык записи, когда модель определяла его сама: по буквам текста. Нужен, чтобы выбрать язык
@@ -319,7 +330,7 @@ fn fix_terms(text: &str, rules: &[(Regex, String)]) -> String {
     rules.iter().fold(text.to_string(), |s, (re, term)| re.replace_all(&s, term.as_str()).into_owned())
 }
 
-fn capitalize(s: &str) -> String {
+pub fn capitalize(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
         Some(f) => f.to_uppercase().chain(c).collect(),

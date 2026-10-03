@@ -10,5 +10,8 @@
     <string>ru</string>
     <string>en</string>
   </array>
+  <!-- Запись с микрофона: без этой строки система не спросит разрешения и звука не будет. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Для записи встреч и диктовок с расшифровкой на ходу · To record meetings and dictation with live transcription</string>
 </dict>
 </plist>

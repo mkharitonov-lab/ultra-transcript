@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { api } from "../api";
   import { fmtSize, t } from "../i18n.svelte";
   import { models } from "../models.svelte";
   import { app } from "../state.svelte";
@@ -12,6 +14,17 @@
   const denoiser = $derived(app.info?.models.find((m) => m.kind === "denoise"));
   const loading = $derived(denoiser ? models.progress(denoiser.name) : undefined);
 
+  /** Микрофоны, которые есть сейчас; выбранный, но отключённый, тоже остаётся в списке. */
+  let devices = $state<string[]>([]);
+  onMount(() => {
+    api.inputDevices().then((d) => (devices = d), () => {});
+  });
+  const choices = $derived(s.input_device && !devices.includes(s.input_device) ? [...devices, s.input_device] : devices);
+  function pickDevice(e: Event) {
+    s.input_device = (e.currentTarget as HTMLSelectElement).value;
+    save();
+  }
+
   /** Шумоподавлению нужна модель: включили — скачиваем. */
   function denoise(on: boolean) {
     save();
@@ -19,7 +32,16 @@
   }
 </script>
 
-<Group hint={t("set.audio.hint")}>
+<Group title={t("set.audio.record")}>
+  <Row label={t("set.audio.mic")} hint={t("set.audio.micHint")}>
+    <select value={s.input_device} onchange={pickDevice}>
+      <option value="">{t("set.audio.micDefault")}{devices[0] ? ` — ${devices[0]}` : ""}</option>
+      {#each choices as d (d)}<option value={d}>{d}</option>{/each}
+    </select>
+  </Row>
+</Group>
+
+<Group title={t("set.audio.prepare")} hint={t("set.audio.hint")}>
   <Row label={t("set.audio.denoise")} hint={t("set.audio.denoiseHint")}>
     {#if loading !== undefined}
       <Progress value={loading} width="96px" />

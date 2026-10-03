@@ -5,7 +5,8 @@ import { toast } from "./ui/toast.svelte";
 
 export type Recording = {
   id: string; title: string; source: string; created_at: string;
-  duration: number; status: "queued" | "processing" | "done" | "error"; error: string;
+  /** `recording` — идёт запись с микрофона. */
+  duration: number; status: "recording" | "queued" | "processing" | "done" | "error"; error: string;
   rule_id: number | null;
   /** Папка библиотеки. */
   folder_id: number | null;
@@ -51,6 +52,8 @@ export type Settings = {
   diar_model: DiarModel; cluster_threshold: number; voice_threshold: number; archive_kbps: number;
   auto_accept_suggestions: boolean; transcript_template: string; protocol_template: string;
   theme: Theme; language: LangSetting; notifications: boolean; developer_mode: boolean;
+  /** Микрофон для записи: имя устройства; пусто — выбранный в системе. */
+  input_device: string;
 };
 /** `required` — без модели нельзя расшифровывать при текущих настройках. */
 export type Model = {
@@ -64,7 +67,8 @@ export type AppInfo = {
   /** Язык системы, если ядро смогло его узнать. */
   system_language: Lang | null;
 };
-export type JobKind = "transcribe" | "protocol" | "export";
+/** `record` — запись с микрофона: идёт в своём потоке, пока её не остановят. */
+export type JobKind = "record" | "transcribe" | "protocol" | "export";
 /** `stage` — код этапа, `title` — его название на языке интерфейса. */
 export type JobEvent = {
   recording_id: string; job: JobKind; status: Recording["status"];
@@ -76,16 +80,21 @@ export type LiveEvent = { recording_id: string } & (
   | { kind: "draft" }
   | { kind: "protocol"; text: string; reset: boolean }
 );
-/** Задача в работе и всё, что она успела показать. */
+/** Задача в работе и всё, что она успела показать; `seconds` — сколько записано с микрофона. */
 export type LiveState = {
   recording_id: string; job: JobKind; stage: string; title: string; progress: number;
-  lines: { start: number; text: string }[]; drafts: number; protocol: string;
+  lines: { start: number; text: string }[]; drafts: number; protocol: string; seconds: number;
 };
+/** Ход записи с микрофона: сколько секунд записано и пиковая громкость (0…1). */
+export type RecordEvent = { recording_id: string; seconds: number; peak: number };
 export type ModelEvent = { name: string; progress: number; error: string };
 export type Stats = { recordings: number; seconds: number; terms: number; people: number; voices: number; rules: number };
 export type Hit = { id: string; snippet: string };
 export type Doc = "transcript" | "protocol";
 export type Format = "md" | "docx";
+
+/** Пункты меню приложения и значка, которые выполняет окно. */
+export type MenuAction = "about" | "settings" | "add" | "folder" | "record";
 
 export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
@@ -105,7 +114,11 @@ export const api = {
   search: (query: string) => invoke<Hit[]>("search", { query }),
   stats: () => invoke<Stats>("stats"),
   transcript: (id: string) => invoke<Transcript>("get_transcript", { id }),
-  live: () => invoke<LiveState | null>("live"),
+  live: () => invoke<LiveState[]>("live"),
+  startRecording: () => invoke<string>("start_recording"),
+  /** `keep` — сохранить и расшифровать, иначе удалить записанное. */
+  stopRecording: (id: string, keep = true) => invoke<void>("stop_recording", { id, keep }),
+  inputDevices: () => invoke<string[]>("input_devices"),
   saveTranscript: (transcript: Transcript) => invoke<void>("save_transcript", { transcript }),
   assignSpeaker: (id: string, speaker: string, personId: number | null, name: string) =>
     invoke<Transcript>("assign_speaker", { id, speaker, personId, name }),
@@ -137,9 +150,10 @@ export const api = {
   reveal: (path: string, open = false) => invoke<void>("reveal", { path, open }),
   onJob: (cb: (e: JobEvent) => void) => listen<JobEvent>("job", (e) => cb(e.payload)),
   onLive: (cb: (e: LiveEvent) => void) => listen<LiveEvent>("live", (e) => cb(e.payload)),
+  onRecord: (cb: (e: RecordEvent) => void) => listen<RecordEvent>("record", (e) => cb(e.payload)),
   onModels: (cb: (e: ModelEvent) => void) => listen<ModelEvent>("models", (e) => cb(e.payload)),
   /** Пункт строки меню приложения, который выполняет окно. */
-  onMenu: (cb: (action: "about" | "settings" | "add" | "folder") => void) => listen<"about" | "settings" | "add" | "folder">("menu", (e) => cb(e.payload)),
+  onMenu: (cb: (action: MenuAction) => void) => listen<MenuAction>("menu", (e) => cb(e.payload)),
 };
 
 export const recordingDir = (dataDir: string, id: string) => `${dataDir}/recordings/${id}`;

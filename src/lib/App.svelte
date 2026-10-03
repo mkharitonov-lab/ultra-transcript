@@ -12,7 +12,7 @@
   import { t } from "./i18n.svelte";
   import { live } from "./live.svelte";
   import { models } from "./models.svelte";
-  import { newFolder } from "./recordings";
+  import { newFolder, startRecording } from "./recordings";
   import Settings from "./settings/Settings.svelte";
   import { app } from "./state.svelte";
 
@@ -35,6 +35,7 @@
     const key = e.key.toLowerCase();
     if (key === ",") app.go("settings");
     else if (key === "o") addFiles();
+    else if (key === "r") startRecording();
     else if (key === "n" && e.shiftKey) newFolder();
     else return;
     e.preventDefault();
@@ -47,9 +48,11 @@
         if (live.onJob(e)) app.refresh();
       }),
       api.onLive((e) => live.onLive(e)),
+      api.onRecord((e) => live.onRecord(e)),
       api.onModels((e) => models.onEvent(e)),
       api.onMenu((action) => {
         if (action === "add") addFiles();
+        else if (action === "record") startRecording();
         else if (action === "folder") newFolder();
         else app.go("settings", action === "about" ? "about" : undefined);
       }),

@@ -60,6 +60,7 @@ ship its license files with it.
 |---|---|
 | Tauri, wry, tao and Tauri plugins | MIT or Apache 2.0 |
 | Svelte, SvelteKit | MIT |
+| cpal (microphone capture) | Apache 2.0 |
 | sherpa-onnx | Apache 2.0 |
 | ONNX Runtime (inside sherpa-onnx) | MIT |
 | llama.cpp (through llama-cpp-2) | MIT |

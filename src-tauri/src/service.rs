@@ -1,9 +1,10 @@
-//! Очередь задач, фоновый обработчик и слежение за папками. Не зависит от UI:
-//! используется и приложением, и CLI.
+//! Очередь задач, фоновый обработчик, запись с микрофона и слежение за папками.
+//! Не зависит от UI: используется и приложением, и CLI.
 
 use crate::diar::{DiarModel, Diarizer};
 use crate::lang::{tr, Stage};
 use crate::pipeline::{self, Live, Report};
+use crate::record::{self, Capture, Listen, Wav};
 use crate::speech::{AsrModel, Engines};
 use crate::store::{Recording, Store};
 use crate::{media, models};
@@ -12,8 +13,10 @@ use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, sync_channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// Состояние задачи: поставлена, началась, перешла к новому этапу, закончилась.
@@ -38,9 +41,19 @@ pub struct LiveEvent {
     pub live: Live,
 }
 
+/// Ход записи с микрофона: сколько записано и насколько громко.
+#[derive(Clone, Debug, Serialize)]
+pub struct RecordEvent {
+    pub recording_id: String,
+    pub seconds: f32,
+    /// Пиковая громкость за последние доли секунды, 0…1.
+    pub peak: f32,
+}
+
 pub enum Signal {
     Job(Event),
     Live(LiveEvent),
+    Record(RecordEvent),
 }
 
 pub type Emit = Arc<dyn Fn(Signal) + Send + Sync>;
@@ -55,6 +68,8 @@ pub enum Job {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JobKind {
+    /// Запись с микрофона — не задача очереди: идёт в своём потоке, пока её не остановят.
+    Record,
     Transcribe,
     Protocol,
     Export,
@@ -83,6 +98,8 @@ pub struct LiveState {
     pub drafts: u32,
     /// Протокол, как его пишет LLM.
     pub protocol: String,
+    /// Сколько секунд записано — для записи с микрофона.
+    pub seconds: f32,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -98,18 +115,34 @@ struct Loaded {
     diarizer: Option<Diarizer>,
 }
 
+/// Идущая запись с микрофона: флаги для её потока и сам поток.
+struct Recorder {
+    id: String,
+    stop: Arc<AtomicBool>,
+    /// Сохранить записанное и расшифровать (иначе — удалить).
+    keep: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
 pub struct Service {
     pub store: Arc<Store>,
     tx: Mutex<Sender<Job>>,
     emit: Emit,
-    /// Задача, которая сейчас в работе.
-    live: Mutex<Option<LiveState>>,
+    /// Что сейчас в работе: задача очереди и, отдельно, запись с микрофона.
+    live: Mutex<Vec<LiveState>>,
+    recorder: Mutex<Option<Recorder>>,
 }
 
 impl Service {
     pub fn start(store: Arc<Store>, emit: Emit, watch: bool) -> Arc<Self> {
         let (tx, rx) = channel::<Job>();
-        let svc = Arc::new(Self { store: store.clone(), tx: Mutex::new(tx), emit, live: Mutex::new(None) });
+        let svc = Arc::new(Self {
+            store: store.clone(),
+            tx: Mutex::new(tx),
+            emit,
+            live: Mutex::new(vec![]),
+            recorder: Mutex::new(None),
+        });
 
         let worker = svc.clone();
         std::thread::spawn(move || {
@@ -128,8 +161,13 @@ impl Service {
         });
 
         // Прерванные расшифровки (приложение закрыли во время обработки) — снова в очередь.
+        // Оборванная запись с микрофона — тоже: что успело записаться, расшифровывается.
         for r in store.recordings().unwrap_or_default() {
-            if r.status == "queued" || r.status == "processing" {
+            if r.status == "recording" {
+                let _ = Wav::repair(&PathBuf::from(&r.source));
+                let _ = store.set_status(&r.id, "queued", "");
+            }
+            if r.status == "queued" || r.status == "processing" || r.status == "recording" {
                 svc.send(Job::Transcribe { id: r.id, input: PathBuf::from(r.source), asr: None, diar: None });
             }
         }
@@ -148,8 +186,8 @@ impl Service {
         self.send(job);
     }
 
-    /// Задача в работе и всё, что она успела показать.
-    pub fn live(&self) -> Option<LiveState> {
+    /// Что в работе (задача очереди, запись с микрофона) и всё, что успело показаться.
+    pub fn live(&self) -> Vec<LiveState> {
         self.live.lock().unwrap().clone()
     }
 
@@ -184,12 +222,13 @@ impl Service {
     fn notify(&self, id: &str, job: JobKind, status: &str, stage: Stage, progress: f32, message: &str) {
         {
             let mut live = self.live.lock().unwrap();
-            match (status, live.as_mut()) {
-                ("processing", Some(l)) if l.recording_id == id && l.job == job => {
+            let same = live.iter_mut().find(|l| l.recording_id == id);
+            match (status, same) {
+                ("processing", Some(l)) if l.job == job => {
                     (l.stage, l.title, l.progress) = (stage.code().into(), stage.title().into(), progress);
                 }
-                ("processing", _) => {
-                    *live = Some(LiveState {
+                ("processing", same) => {
+                    let fresh = LiveState {
                         recording_id: id.into(),
                         job,
                         stage: stage.code().into(),
@@ -198,9 +237,14 @@ impl Service {
                         lines: vec![],
                         drafts: 0,
                         protocol: String::new(),
-                    });
+                        seconds: 0.0,
+                    };
+                    match same {
+                        Some(l) => *l = fresh,
+                        None => live.push(fresh),
+                    }
                 }
-                ("done" | "error", Some(l)) if l.recording_id == id => *live = None,
+                ("done" | "error", _) => live.retain(|l| l.recording_id != id),
                 _ => {}
             }
         }
@@ -216,7 +260,7 @@ impl Service {
     }
 
     fn show(&self, id: &str, item: Live) {
-        if let Some(l) = self.live.lock().unwrap().as_mut().filter(|l| l.recording_id == id) {
+        if let Some(l) = self.live.lock().unwrap().iter_mut().find(|l| l.recording_id == id) {
             match &item {
                 Live::Text { start, text } => l.lines.push(Line { start: *start, text: text.clone() }),
                 Live::Draft => l.drafts += 1,
@@ -249,6 +293,9 @@ impl Service {
             Ok(_) if kind == JobKind::Export => {}
             Ok(warnings) => {
                 let msg = warnings.join("\n");
+                if kind == JobKind::Transcribe {
+                    self.drop_capture(&id);
+                }
                 let _ = self.store.set_status(&id, "done", &msg);
                 self.notify(&id, kind, "done", Stage::Queue, 1.0, &msg);
             }
@@ -322,6 +369,161 @@ impl Service {
         Ok(warnings)
     }
 
+    // ---------- запись с микрофона ----------
+
+    /// Запись, которая идёт сейчас.
+    pub fn recording(&self) -> Option<String> {
+        self.recorder.lock().unwrap().as_ref().map(|r| r.id.clone())
+    }
+
+    /// Начинает запись с микрофона из настроек; возвращает идентификатор новой записи.
+    /// Микрофон открывается до возврата — если его нет, ошибка приходит сразу.
+    pub fn start_recording(self: &Arc<Self>) -> Result<String> {
+        let mut slot = self.recorder.lock().unwrap();
+        if slot.is_some() {
+            anyhow::bail!(tr("запись уже идёт", "a recording is already in progress"));
+        }
+        let settings = self.store.settings();
+        let dir = self.store.models_dir();
+        if let Some(m) = models::required(&dir, settings.asr_model, DiarModel::Off).into_iter().find(|m| !m.installed) {
+            anyhow::bail!(
+                "{} {} {}",
+                tr("модель", "the model"),
+                m.title,
+                tr("не скачана — откройте «Настройки → Модели»", "is not downloaded — open Settings → Models")
+            );
+        }
+        let now = chrono::Local::now();
+        let id = format!("{}-{}", now.format("%Y%m%d-%H%M%S"), &uuid::Uuid::new_v4().simple().to_string()[..6]);
+        let rec_dir = self.store.recording_dir(&id);
+        std::fs::create_dir_all(&rec_dir)?;
+        let source = rec_dir.join(record::CAPTURE_FILE);
+
+        // Микрофон открывается в потоке записи (поток захвата живёт там), а итог ждём здесь.
+        let (ready_tx, ready_rx) = sync_channel::<Result<String>>(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let keep = Arc::new(AtomicBool::new(true));
+        let svc = self.clone();
+        let (tid, tstop, tkeep, tsource) = (id.clone(), stop.clone(), keep.clone(), source.clone());
+        let thread = std::thread::spawn(move || {
+            let capture = match Capture::open(&settings.input_device) {
+                Ok(c) => {
+                    let _ = ready_tx.send(Ok(c.device.clone()));
+                    c
+                }
+                Err(e) => return drop(ready_tx.send(Err(e))),
+            };
+            svc.record(&tid, capture, &tsource, &tstop, &tkeep);
+        });
+        match ready_rx.recv() {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                let _ = std::fs::remove_dir_all(&rec_dir);
+                return Err(e);
+            }
+            Err(_) => {
+                let _ = std::fs::remove_dir_all(&rec_dir);
+                anyhow::bail!(tr("не удалось начать запись", "could not start recording"));
+            }
+        }
+        self.store.upsert_recording(&Recording {
+            id: id.clone(),
+            title: format!("{} {}", tr("Запись", "Recording"), now.format("%d.%m.%Y %H:%M")),
+            source: source.to_string_lossy().into_owned(),
+            created_at: now.format("%Y-%m-%d %H:%M").to_string(),
+            duration: 0.0,
+            status: "recording".into(),
+            error: String::new(),
+            rule_id: None,
+            folder_id: None,
+            archived: false,
+            has_protocol: false,
+        })?;
+        self.notify(&id, JobKind::Record, "processing", Stage::LoadModels, 0.0, "");
+        *slot = Some(Recorder { id: id.clone(), stop, keep, thread: Some(thread) });
+        Ok(id)
+    }
+
+    /// Поток записи: модели, затем звук в файл и фразы в окно, пока не остановят.
+    fn record(&self, id: &str, capture: Capture, source: &PathBuf, stop: &AtomicBool, keep: &AtomicBool) {
+        let settings = self.store.settings();
+        let outcome = (|| -> Result<f32> {
+            let engines = Engines::load(&self.store.models_dir(), settings.asr_model, &settings.speech_language)?;
+            let mut wav = Wav::create(source)?;
+            self.notify(id, JobKind::Record, "processing", Stage::Record, 0.0, "");
+            let listen = RecordListener { svc: self, id };
+            let seconds = record::run(&capture, &engines, &mut wav, stop, &listen);
+            wav.finish()?;
+            seconds
+        })();
+        drop(capture);
+        // Запись закончилась: место освобождается до того, как окно узнает об итоге.
+        if let Some(r) = self.recorder.lock().unwrap().take() {
+            if let Some(t) = r.thread {
+                drop(t); // свой же поток — ждать нельзя
+            }
+        }
+        match outcome {
+            Ok(_) if !keep.load(Ordering::Relaxed) => {
+                let _ = self.store.delete_recording(id);
+                self.notify(id, JobKind::Record, "done", Stage::Queue, 1.0, "");
+            }
+            Ok(_) => {
+                let _ = self.store.set_status(id, "queued", "");
+                self.notify(id, JobKind::Record, "done", Stage::Queue, 1.0, "");
+                self.notify(id, JobKind::Transcribe, "queued", Stage::Queue, 0.0, "");
+                self.send(Job::Transcribe { id: id.into(), input: source.clone(), asr: None, diar: None });
+            }
+            Err(e) => {
+                let msg = format!("{e:#}");
+                let _ = Wav::repair(source);
+                let _ = self.store.set_status(id, "error", &msg);
+                self.notify(id, JobKind::Record, "error", Stage::Queue, 0.0, &msg);
+            }
+        }
+    }
+
+    /// Останавливает запись; `keep` — сохранить и расшифровать, иначе удалить.
+    /// Возвращается сразу: поток записи закончит сам и поставит расшифровку в очередь.
+    pub fn stop_recording(&self, id: &str, keep: bool) -> Result<()> {
+        let slot = self.recorder.lock().unwrap();
+        let r = slot.as_ref().filter(|r| r.id == id).ok_or_else(|| anyhow!(tr("запись уже остановлена", "the recording has already stopped")))?;
+        r.keep.store(keep, Ordering::Relaxed);
+        r.stop.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Перед выходом: закончить запись, чтобы файл был цел; расшифровка пойдёт при следующем запуске.
+    pub fn finish_recording(&self) {
+        let r = self.recorder.lock().unwrap().take();
+        if let Some(mut r) = r {
+            r.stop.store(true, Ordering::Relaxed);
+            if let Some(t) = r.thread.take() {
+                let _ = t.join();
+            }
+        }
+    }
+
+    fn tick(&self, id: &str, seconds: f32, peak: f32) {
+        if let Some(l) = self.live.lock().unwrap().iter_mut().find(|l| l.recording_id == id) {
+            l.seconds = seconds;
+        }
+        (self.emit)(Signal::Record(RecordEvent { recording_id: id.into(), seconds, peak }));
+    }
+
+    /// Запись с микрофона расшифрована: исходный WAV (115 МБ в час) больше не нужен —
+    /// источником остаётся архив `audio.ogg`.
+    fn drop_capture(&self, id: &str) {
+        let Ok(r) = self.store.recording(id) else { return };
+        let source = PathBuf::from(&r.source);
+        if source.file_name().is_some_and(|n| n == record::CAPTURE_FILE) && source.starts_with(self.store.recording_dir(id)) {
+            let archive = self.store.recording_dir(id).join("audio.ogg");
+            if archive.exists() && self.store.set_source(id, &archive).is_ok() {
+                let _ = std::fs::remove_file(&source);
+            }
+        }
+    }
+
     fn reporter<'a>(&'a self, id: &'a str, job: JobKind) -> Reporter<'a> {
         Reporter { svc: self, id, job, protocol: RefCell::new((String::new(), Instant::now())) }
     }
@@ -390,6 +592,22 @@ impl Report for Reporter<'_> {
             held.1 = Instant::now();
             self.svc.show(self.id, Live::Protocol { text: std::mem::take(&mut held.0), reset: false });
         }
+    }
+}
+
+/// Передаёт ход записи с микрофона в события окна.
+struct RecordListener<'a> {
+    svc: &'a Service,
+    id: &'a str,
+}
+
+impl Listen for RecordListener<'_> {
+    fn text(&self, start: f32, text: String) {
+        self.svc.show(self.id, Live::Text { start, text });
+    }
+
+    fn tick(&self, seconds: f32, peak: f32) {
+        self.svc.tick(self.id, seconds, peak);
     }
 }
 

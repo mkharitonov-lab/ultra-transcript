@@ -3,11 +3,13 @@
   import { api, fmtTime, type Folder, type Recording } from "./api";
   import { fmtDate, i18n, locale, t, tn } from "./i18n.svelte";
   import { live } from "./live.svelte";
-  import { folderMenu, newFolder, recordingMenu, remove } from "./recordings";
+  import { folderMenu, newFolder, recordingMenu, remove, startRecording } from "./recordings";
   import { app, type View } from "./state.svelte";
   import { openMenu } from "./ui/menu.svelte";
 
   let { onadd }: { onadd: () => void } = $props();
+  /** Запись с микрофона, которая идёт сейчас, — кнопка «Записать» ведёт к ней. */
+  const capturing = $derived(live.recording);
 
   let query = $state("");
   /** Совпадения в тексте расшифровок: запись → фрагмент с найденным. */
@@ -146,13 +148,15 @@
 
 {#snippet row(r: Recording)}
   {@const job = live.of(r.id)}
-  {@const working = r.status === "processing" || !!job}
+  {@const capturing = r.status === "recording"}
+  {@const working = !capturing && (r.status === "processing" || !!job)}
   <button class="item rec" data-id={r.id}
     class:active={app.selected === r.id && !marked.length} class:marked={marked.includes(r.id)} class:dim={r.archived}
     onclick={(e) => click(e, r)}
     oncontextmenu={(e) => openMenu(e, recordingMenu(targets(r)))}>
     <span class="status {working ? 'processing' : r.status}">
-      {#if working}<span class="spinner"></span>
+      {#if capturing}<span class="reddot"></span>
+      {:else if working}<span class="spinner"></span>
       {:else if r.status === "queued"}<Icon name="clock" size={13} />
       {:else if r.status === "error"}<Icon name="alert" size={13} />
       {:else}<Icon name="wave" size={13} />{/if}
@@ -161,6 +165,7 @@
       <span class="title">{r.title}</span>
       <span class="meta">
         {#if q && hits[r.id]}…{hits[r.id]}…
+        {:else if capturing}{t("status.recording")} · {fmtTime(job?.seconds ?? 0)}
         {:else if working}{job?.title || t("status.processing")}{job && job.progress > 0 ? ` · ${Math.round(job.progress * 100)}%` : ""}
         {:else if r.status === "queued"}{t("status.queued")}
         {:else if r.status === "error"}{t("status.error")}
@@ -173,7 +178,12 @@
 <aside>
   <div class="titlebar" data-tauri-drag-region></div>
   <div class="top">
-    <button class="primary add" onclick={onadd}><Icon name="plus" /> {t("side.add")}</button>
+    <div class="actions">
+      <button class="primary add" class:live={!!capturing} onclick={startRecording}>
+        {#if capturing}<span class="reddot"></span> {fmtTime(capturing.seconds)}{:else}<Icon name="mic" /> {t("side.record")}{/if}
+      </button>
+      <button class="add" onclick={onadd}><Icon name="plus" /> {t("side.add")}</button>
+    </div>
     <label class="search">
       <Icon name="search" size={13} />
       <input type="text" placeholder={t("side.search")} bind:value={query} bind:this={searchField} spellcheck="false"
@@ -187,6 +197,7 @@
 
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <nav class="library" {onkeydown} oncontextmenu={(e) => openMenu(e, [
+    { label: t("side.record"), icon: "mic", action: startRecording },
     { label: t("side.add"), icon: "plus", action: onadd },
     { label: t("folder.new"), icon: "folder-plus", action: () => newFolder() },
   ])}>
@@ -256,7 +267,15 @@
   .titlebar { height: 38px; flex-shrink: 0; }
   .top { padding: 0 12px 2px; display: flex; flex-direction: column; gap: 8px; }
   .home { margin: 0 -4px; width: auto; }
-  .add { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px; font-weight: 550; }
+  .actions { display: flex; gap: 6px; }
+  .add { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 8px; font-weight: 550; white-space: nowrap; }
+  .add :global(svg) { flex-shrink: 0; }
+  /* Кнопка записи — по содержимому: длинной подписи «Добавить файлы» нужно больше места. */
+  .add.primary { flex: 0 0 auto; }
+  .add.live { background: var(--danger); font-variant-numeric: tabular-nums; }
+  .add.live .reddot { background: var(--accent-fg); }
+  .reddot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
   .search {
     display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: var(--r-sm);
     background: var(--bg-input); border: 1px solid var(--border); color: var(--fg-faint);
@@ -302,6 +321,7 @@
     background: var(--bg-card); color: var(--fg-muted); border: 1px solid var(--border);
   }
   .status.done { color: var(--accent); }
+  .status.recording { color: var(--danger); }
   .status.error { color: var(--danger); }
   .badge {
     flex: 0 !important; background: var(--warn); color: var(--warn-fg); border-radius: 9px; padding: 0 6px;

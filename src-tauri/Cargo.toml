@@ -55,6 +55,8 @@ ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "
 kodama = "0.3"
 # Nemotron 3: библиотека NeMo-Speech.cpp подгружается при выборе движка — без неё приложение работает.
 libloading = "0.9"
+# Запись с микрофона: CoreAudio на Mac, WASAPI на Windows.
+cpal = "0.18"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

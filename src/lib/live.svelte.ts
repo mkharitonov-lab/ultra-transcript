@@ -1,23 +1,40 @@
-/** Ход обработки записей в реальном времени: этап, распознанный текст, протокол по мере написания. */
+/**
+ * Ход обработки записей в реальном времени: этап, распознанный текст, протокол по мере написания,
+ * а у записи с микрофона — секунды и громкость.
+ */
 
-import { api, type JobEvent, type LiveEvent, type LiveState } from "./api";
+import { api, type JobEvent, type LiveEvent, type LiveState, type RecordEvent } from "./api";
 
 let jobs = $state<Record<string, LiveState>>({});
+/** Громкость микрофона (0…1) по записям, которые идут сейчас. */
+let peaks = $state<Record<string, number>>({});
 
 export const live = {
   /** Что сейчас происходит с записью; `undefined` — она не в работе. */
   of: (id: string): LiveState | undefined => jobs[id],
+  peak: (id: string): number => peaks[id] ?? 0,
+  /** Запись с микрофона, которая идёт сейчас. */
+  get recording(): LiveState | undefined {
+    return Object.values(jobs).find((j) => j.job === "record");
+  },
 
   /** Окно открыли посреди обработки — забираем у ядра то, что уже накопилось. */
   async restore() {
-    const state = await api.live().catch(() => null);
-    if (state && !jobs[state.recording_id]) jobs[state.recording_id] = state;
+    const states = await api.live().catch(() => [] as LiveState[]);
+    for (const state of states) if (!jobs[state.recording_id]) jobs[state.recording_id] = state;
+  },
+
+  onRecord(e: RecordEvent) {
+    const cur = jobs[e.recording_id];
+    if (cur) cur.seconds = e.seconds;
+    peaks[e.recording_id] = e.peak;
   },
 
   /** Возвращает `true`, когда задача началась или закончилась — пора обновить библиотеку. */
   onJob(e: JobEvent): boolean {
     if (e.status !== "processing") {
       delete jobs[e.recording_id];
+      delete peaks[e.recording_id];
       return true;
     }
     const cur = jobs[e.recording_id];
@@ -29,7 +46,7 @@ export const live = {
     }
     jobs[e.recording_id] = {
       recording_id: e.recording_id, job: e.job, stage: e.stage, title: e.title, progress: e.progress,
-      lines: [], drafts: 0, protocol: "",
+      lines: [], drafts: 0, protocol: "", seconds: 0,
     };
     return true;
   },

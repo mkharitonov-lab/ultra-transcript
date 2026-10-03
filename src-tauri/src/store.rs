@@ -86,6 +86,8 @@ pub struct Settings {
     pub notifications: bool,
     /// Показывать раздел настроек с параметрами для отладки.
     pub developer_mode: bool,
+    /// Микрофон для записи: имя устройства; пусто — выбранный в системе.
+    pub input_device: String,
 }
 
 impl Default for Settings {
@@ -112,6 +114,7 @@ impl Default for Settings {
             speech_language: "auto".into(),
             notifications: true,
             developer_mode: false,
+            input_device: String::new(),
         }
     }
 }
@@ -347,6 +350,12 @@ impl Store {
              ON CONFLICT(id) DO UPDATE SET title=?2, duration=?5, status=?6, error=?7",
             params![r.id, r.title, r.source, r.created_at, r.duration, r.status, r.error, r.rule_id],
         )?;
+        Ok(())
+    }
+
+    /// Файл, из которого расшифровывается запись (по нему идёт «Расшифровать заново»).
+    pub fn set_source(&self, id: &str, source: &Path) -> Result<()> {
+        self.db().execute("UPDATE recordings SET source=?2 WHERE id=?1", params![id, source.to_string_lossy()])?;
         Ok(())
     }
 

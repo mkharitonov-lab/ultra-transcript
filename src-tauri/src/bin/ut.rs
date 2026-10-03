@@ -2,6 +2,8 @@
 //! `ut <файл> [--protocol] [--whisper|--parakeet] [--lang <язык>] [--diar off|pyannote3|community1|nemotron3] [--threshold <порог>] [--llm <модель>] [--raw] [--live]`.
 //! `--raw` — без предобработки звука (шумоподавления и выравнивания громкости);
 //! `--lang` — язык записи для Whisper и Parakeet (ru, en… или auto); `--live` — печатать текст по мере распознавания.
+//! Вместо файла — `--record <секунд>`: запись с микрофона (`--mic <имя>` — какого) с текстом на ходу,
+//! затем обычный конвейер; `--devices` — список микрофонов.
 
 use std::sync::{mpsc, Arc};
 use ultra_transcript_lib::pipeline::Live;
@@ -11,10 +13,22 @@ use ultra_transcript_lib::{diar::DiarModel, models, pipeline, speech::AsrModel, 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1));
+    if args.iter().any(|a| a == "--devices") {
+        for d in ultra_transcript_lib::record::input_devices() {
+            println!("{d}");
+        }
+        return Ok(());
+    }
+    let record: Option<u64> = value("--record").map(|v| v.parse()).transpose()?;
     let file = args.iter().enumerate()
-        .find(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--llm", "--diar", "--threshold", "--lang"].contains(&args[i - 1].as_str())))
+        .find(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--llm", "--diar", "--threshold", "--lang", "--record", "--mic"].contains(&args[i - 1].as_str())))
         .map(|(_, a)| a)
-        .expect("использование: ut <файл> [--protocol] [--whisper|--parakeet] [--diar <движок>] [--threshold <порог>] [--llm <модель>] [--raw] [--live]");
+        .filter(|_| record.is_none())
+        .map(String::as_str)
+        .unwrap_or("");
+    if file.is_empty() && record.is_none() {
+        anyhow::bail!("использование: ut <файл> [--protocol] [--whisper|--parakeet] [--diar <движок>] [--threshold <порог>] [--llm <модель>] [--raw] [--live] | ut --record <секунд> [--mic <имя>] | ut --devices");
+    }
     let raw = args.iter().any(|a| a == "--raw");
     // Своя библиотека во временной папке: CLI не должен подхватывать задачи
     // и менять настройки работающего приложения. Модели — общие.
@@ -53,6 +67,7 @@ fn main() -> anyhow::Result<()> {
         settings.cluster_threshold = v.parse()?;
     }
     settings.speech_language = value("--lang").cloned().unwrap_or_else(|| "ru".into());
+    settings.input_device = value("--mic").cloned().unwrap_or_default();
     // --llm <модель из каталога>: редактура, справочники и протокол встроенной LLM.
     if let Some(i) = args.iter().position(|a| a == "--llm") {
         settings.llm_enabled = true;
@@ -60,7 +75,20 @@ fn main() -> anyhow::Result<()> {
         settings.llm_local_model = args.get(i + 1).cloned().unwrap_or_default();
     }
     store.save_settings(&settings)?;
-    let id = svc.import(std::fs::canonicalize(file)?, None)?;
+    let id = match record {
+        // Запись с микрофона: по таймеру останавливается сама, дальше — как с файлом.
+        Some(secs) => {
+            let id = svc.start_recording()?;
+            eprintln!("запись {secs} с: говорите");
+            let (svc2, id2) = (svc.clone(), id.clone());
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(secs));
+                let _ = svc2.stop_recording(&id2, true);
+            });
+            id
+        }
+        None => svc.import(std::fs::canonicalize(file)?, None)?,
+    };
     let mut protocol_requested = !args.iter().any(|a| a == "--protocol");
     let mut last = String::new();
     for signal in rx {
@@ -75,8 +103,18 @@ fn main() -> anyhow::Result<()> {
                 }
                 continue;
             }
+            Signal::Record(r) if live && r.recording_id == id => {
+                eprint!("\r    {:.1} с, громкость {:>3.0}%   ", r.seconds, r.peak * 100.0);
+                continue;
+            }
+            Signal::Record(_) => continue,
         };
         if e.recording_id != id { continue; }
+        // Конец записи с микрофона — не конец работы: дальше расшифровка.
+        if e.job == ultra_transcript_lib::service::JobKind::Record && e.status != "error" && e.status != "processing" {
+            if live { eprintln!(); }
+            continue;
+        }
         let line = format!("{} {}", e.status, e.title);
         if line != last || e.progress >= 1.0 {
             eprintln!("[{:6.1}s] {line} {:.0}%", t0.elapsed().as_secs_f32(), e.progress * 100.0);

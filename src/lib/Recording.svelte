@@ -3,6 +3,7 @@
   import Icon from "./Icon.svelte";
   import LivePane from "./LivePane.svelte";
   import ProtocolView from "./ProtocolView.svelte";
+  import RecordPane from "./RecordPane.svelte";
   import { api, audioUrl, copyText, fmtTime, showError, speakerColor, type Person, type Recording, type Speaker, type Transcript, type Utterance } from "./api";
   import { fmtDate, t, tn } from "./i18n.svelte";
   import { live, parsePartialJson } from "./live.svelte";
@@ -33,8 +34,9 @@
   let list = $state<HTMLElement>();
 
   const job = $derived(live.of(recording.id));
-  /** Запись в работе: расшифровывается, ждёт очереди или по ней пишется протокол. */
-  const busy = $derived(recording.status === "processing" || recording.status === "queued" || !!job);
+  /** Запись в работе: идёт запись с микрофона, расшифровывается, ждёт очереди или по ней пишется протокол. */
+  const busy = $derived(recording.status !== "done" && recording.status !== "error" || !!job);
+  const capturing = $derived(recording.status === "recording");
   /** Идёт новая расшифровка, а её черновика ещё нет: показываем текст по мере распознавания. */
   const streaming = $derived(recording.status === "processing" && job?.job === "transcribe" && job.drafts === 0);
   const writing = $derived(job?.job === "protocol");
@@ -207,7 +209,8 @@
       </div>
     </div>
     <div class="meta muted">
-      {fmtDate(recording.created_at)} · {fmtTime(tr?.duration ?? recording.duration)}
+      {fmtDate(recording.created_at)} · {fmtTime(capturing ? (job?.seconds ?? 0) : (tr?.duration ?? recording.duration))}
+      {#if capturing} · {t("status.recording")}{/if}
       {#if tr && !streaming} · {tn("rec.speakers", tr.speakers.length)}{/if}
       {#if tr && app.developer}{#if tr.asr_model} · {tr.asr_model}{/if}{#if tr.diar_model} · {tr.diar_model}{/if}{/if}
     </div>
@@ -261,7 +264,9 @@
     <button class="banner warn" onclick={showWarning}><Icon name="alert" /> <span>{recording.error.split("\n")[0]}</span></button>
   {/if}
 
-  {#if streaming || (!tr && recording.status === "processing")}
+  {#if capturing}
+    <RecordPane {recording} {job} />
+  {:else if streaming || (!tr && recording.status === "processing")}
     <LivePane {job} />
   {:else if !tr}
     <div class="state">

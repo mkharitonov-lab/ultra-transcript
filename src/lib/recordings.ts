@@ -10,7 +10,24 @@ import type { MenuItem } from "./ui/menu.svelte";
 import { toast } from "./ui/toast.svelte";
 
 const ids = (rs: Recording[]) => rs.map((r) => r.id);
-const busy = (r: Recording) => r.status === "processing" || r.status === "queued" || !!live.of(r.id);
+const busy = (r: Recording) => r.status === "processing" || r.status === "queued" || r.status === "recording" || !!live.of(r.id);
+
+// ---------- запись с микрофона ----------
+
+/** Начинает запись и открывает её; если запись уже идёт — открывает идущую. */
+export async function startRecording() {
+  const current = live.recording;
+  if (current) return app.open(current.recording_id);
+  try {
+    const id = await api.startRecording();
+    await app.refresh();
+    app.open(id);
+  } catch (e) {
+    showError(e);
+  }
+}
+
+export const stopRecording = (r: Recording) => done(api.stopRecording(r.id, true));
 
 async function done(work: Promise<unknown>) {
   await work.catch(showError);
@@ -147,6 +164,15 @@ export function recordingMenu(rs: Recording[]): MenuItem[] {
   ];
 
   const items: MenuItem[] = [];
+  // Идущая запись: остановить можно, удалить — нет.
+  if (one?.status === "recording") {
+    return [
+      { label: t("common.open"), icon: "wave", action: () => app.open(one.id) },
+      { label: t("common.rename"), icon: "edit", action: () => rename(one) },
+      { separator: true },
+      { label: t("rec.stop"), icon: "stop", action: () => stopRecording(one) },
+    ];
+  }
   if (one) {
     items.push({ label: t("common.open"), icon: "wave", action: () => app.open(one.id) });
     items.push({ label: t("common.rename"), icon: "edit", action: () => rename(one) });
@@ -183,7 +209,11 @@ export function recordingMenu(rs: Recording[]): MenuItem[] {
     items.push({ label: revealLabel(), icon: "reveal", action: () => reveal(one) });
   }
   items.push({ separator: true });
-  items.push({ label: one ? t("rec.delete") : tn("rec.deleteMany", rs.length), icon: "trash", danger: true, action: () => remove(rs) });
+  items.push({
+    label: one ? t("rec.delete") : tn("rec.deleteMany", rs.length), icon: "trash", danger: true,
+    disabled: rs.some((r) => r.status === "recording"),
+    action: () => remove(rs.filter((r) => r.status !== "recording")),
+  });
   return items;
 }
 

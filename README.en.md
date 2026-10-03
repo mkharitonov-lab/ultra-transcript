@@ -9,6 +9,9 @@ minutes with decisions and action items. It runs on your own computer: recording
 
 ## What it does
 
+- **Records meetings and dictation.** Press "Record" — the text appears as the conversation goes, and once
+  you stop, the recording gets the full treatment: speakers, polishing, minutes. You can close the window:
+  the recording continues, and the menu bar icon stops it.
 - **Transcribes audio and video.** Drop a file on the window — mp3, m4a, wav, mp4, mov and more.
   Speech recognition models to choose from: GigaAM v3, Whisper large-v3-turbo, Parakeet TDT 0.6B v3.
 - **Shows the text right away.** The transcript appears as it is recognized and the minutes are written
@@ -55,6 +58,9 @@ The interface is available in English and Russian, with light and dark themes.
   like `{{decisions}}`. Style it your way; add your own placeholder, for example `{{risks}}`,
   and the assistant fills it in too.
 - **Right-click** a recording, a folder or an utterance for a menu: archive, folders, export, change speaker.
+- **Recording a Zoom or Teams call.** The app records from the microphone, so the other side is captured
+  while the sound plays through the speakers; with headphones only your voice is recorded. Pick the
+  microphone in Settings → Audio. The system asks for microphone access on the first recording.
 
 ## Privacy
 

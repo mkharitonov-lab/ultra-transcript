@@ -4,16 +4,20 @@
 
 use crate::lang::tr;
 use crate::notify;
-use crate::service::{Event, JobKind};
+use crate::service::{Event, JobKind, Service};
 use crate::store::Store;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, RunEvent, Window};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Window};
 
 const TRAY: &str = "main";
+
+/// Идёт ли запись с микрофона — от этого зависит пункт меню значка.
+static RECORDING: AtomicBool = AtomicBool::new(false);
 
 /// Название приложения на языке интерфейса.
 pub fn app_name() -> &'static str {
@@ -23,8 +27,23 @@ pub fn app_name() -> &'static str {
 fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let open = format!("{} {}", tr("Открыть", "Open"), app_name());
     let show = MenuItem::with_id(app, "show", open, true, None::<&str>)?;
+    let record = if RECORDING.load(Ordering::Relaxed) {
+        MenuItem::with_id(app, "stop", tr("Остановить запись", "Stop Recording"), true, None::<&str>)?
+    } else {
+        MenuItem::with_id(app, "record", tr("Записать…", "Record…"), true, None::<&str>)?
+    };
     let quit = MenuItem::with_id(app, "quit", tr("Выйти", "Quit"), true, None::<&str>)?;
-    Menu::with_items(app, &[&show, &quit])
+    Menu::with_items(app, &[&show, &record, &quit])
+}
+
+/// Запись началась или кончилась — в меню значка другой пункт.
+pub fn set_recording(app: &AppHandle, on: bool) {
+    if RECORDING.swap(on, Ordering::Relaxed) == on {
+        return;
+    }
+    if let Some(tray) = app.tray_by_id(TRAY) {
+        let _ = tray.set_menu(menu(app).ok());
+    }
 }
 
 /// Язык интерфейса сменили — меню значка и подсказка на новом языке.
@@ -45,6 +64,17 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu(app)?)
         .on_menu_event(|app, ev| match ev.id.as_ref() {
             "show" => show_window(app),
+            "record" => {
+                show_window(app);
+                let _ = app.emit("menu", "record");
+            }
+            "stop" => {
+                if let Some(svc) = app.try_state::<Arc<Service>>() {
+                    if let Some(id) = svc.recording() {
+                        let _ = svc.stop_recording(&id, true);
+                    }
+                }
+            }
             "quit" => app.exit(0),
             _ => {}
         });
@@ -91,7 +121,13 @@ pub fn on_run_event(app: &AppHandle, event: RunEvent) {
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => show_window(app),
         // Модель выгружаем до выхода: иначе llama.cpp падает, освобождая видеопамять при завершении.
-        RunEvent::Exit => crate::local_llm::unload(),
+        // Идущая запись закрывается, чтобы файл был цел: расшифруется при следующем запуске.
+        RunEvent::Exit => {
+            if let Some(svc) = app.try_state::<Arc<Service>>() {
+                svc.finish_recording();
+            }
+            crate::local_llm::unload();
+        }
         _ => {}
     }
 }
@@ -127,6 +163,9 @@ impl Status {
     }
 
     pub fn update(&self, app: &AppHandle, ev: &Event) {
+        if ev.job == JobKind::Record {
+            set_recording(app, ev.status == "processing");
+        }
         if ev.status == "queued" {
             return; // значок показывает только то, что уже в работе
         }
@@ -157,9 +196,13 @@ impl Status {
         }
     }
 
+    /// Имя файла записи; у записи с микрофона файла с именем нет — её название.
     fn file_name(&self, id: &str) -> String {
-        let source = self.store.recording(id).map(|r| r.source).unwrap_or_default();
-        Path::new(&source).file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned())
+        let Ok(r) = self.store.recording(id) else { return String::new() };
+        if Path::new(&r.source).starts_with(self.store.recording_dir(id)) {
+            return r.title;
+        }
+        Path::new(&r.source).file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned())
     }
 }
 
