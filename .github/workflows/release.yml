@@ -54,9 +54,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      # Windows: папка сборки — короткий C:\t. Иначе пути вложенной сборки llama.cpp (шейдеры Vulkan)
+      # длиннее 260 символов и компилятор не открывает свои же файлы (C1083).
+      - if: runner.os == 'Windows'
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=C:/t" >> "$GITHUB_ENV"
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          # Кэш папки сборки — только на Mac: на Windows она вне репозитория.
+          cache-targets: ${{ runner.os != 'Windows' }}
 
       # FFmpeg в поставке. Mac: свой минимальный (только звук, LGPL), собирается из исходников.
       - name: FFmpeg (Mac)
@@ -118,7 +125,4 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: bundle-${{ matrix.target }}
-          path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
-            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+          path: ${{ join(fromJSON(steps.tauri.outputs.artifactPaths), '\n') }}
