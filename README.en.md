@@ -36,7 +36,7 @@ minutes with decisions and action items. It runs on your own computer: recording
 ## Getting started
 
 1. **Install the app.** Download the installer from [Releases](../../releases/latest): `.dmg` for Mac,
-   `.msi` or `.exe` for Windows. The app is not yet signed with an Apple or Microsoft certificate,
+   `-setup.exe` for Windows. The app is not yet signed with an Apple or Microsoft certificate,
    so the system warns you on first launch — see [First launch](#first-launch).
 2. **Download the models.** On first launch the app offers to download the recognition models, about 215 MB.
    This is done once.

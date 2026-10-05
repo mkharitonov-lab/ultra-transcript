@@ -23,7 +23,7 @@ FFmpeg входит в поставку: Tauri кладёт `src-tauri/binaries/
 CI берёт готовую LGPL-сборку BtbN. Без этого файла `tauri build` и `tauri dev` не запустятся.
 
 **Релизы** собирает GitHub Actions (`.github/workflows/release.yml`): по тегу `v*` — `.dmg` для Mac
-(Apple Silicon) и `.msi`/`.exe` для Windows x64, черновиком на странице Releases. Подписи Apple нет:
+(Apple Silicon) и установщик NSIS (`-setup.exe`) для Windows x64, черновиком на странице Releases. Подписи Apple нет:
 сборка подписана локально (`signingIdentity: "-"`), пользователь при первом запуске нажимает
 «Всё равно открыть» (README, «Первый запуск»). Локально `.dmg` собирается с `CI=true pnpm tauri build`:
 без этого скрипт упаковки оформляет окно образа через Finder и падает, если доступа к Finder нет.

@@ -1,4 +1,4 @@
-# Сборка установщиков: Mac (Apple Silicon, .dmg) и Windows (x64, .msi и .exe).
+# Сборка установщиков: Mac (Apple Silicon, .dmg) и Windows (x64, установщик NSIS .exe).
 # По тегу v* собирает обе и выкладывает черновик релиза на GitHub; вручную (Run workflow) —
 # только собирает, установщики — в артефактах запуска.
 name: release
@@ -36,8 +36,11 @@ jobs:
         include:
           - os: macos-14
             target: aarch64-apple-darwin
+            bundles: app,dmg
+          # Только NSIS: WiX собирает .msi в кодировке 1252 и падает на кириллице в названии.
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            bundles: nsis
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -114,7 +117,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: "Ультра Транскрибатор ${{ github.ref_name }}"
           releaseBody: "Установка и первый запуск — в README."
