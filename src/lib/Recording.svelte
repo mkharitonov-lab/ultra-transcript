@@ -164,7 +164,7 @@
     ...(s.person_id ? [{ label: t("rec.resetPerson"), icon: "x", action: () => assign(s.id, null, "") }] : []),
   ];
 
-  /** Текст реплики после редактуры; без LLM — как распознан. */
+  /** Текст реплики: в старых расшифровках — после редактуры LLM, иначе как распознан. */
   const shown = (u: Utterance) => u.clean || u.text;
 
   const utteranceMenu = (u: Utterance): MenuItem[] => [

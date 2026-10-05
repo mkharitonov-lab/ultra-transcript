@@ -50,7 +50,7 @@ export type Settings = {
   denoise: boolean; level_volume: boolean;
   llm_enabled: boolean; llm_provider: "builtin" | "api"; llm_local_model: string; llm_base_url: string; llm_model: string; llm_api_key: string;
   diar_model: DiarModel; cluster_threshold: number; voice_threshold: number; archive_kbps: number;
-  auto_accept_suggestions: boolean; transcript_template: string; protocol_template: string;
+  auto_accept_suggestions: boolean; auto_title: boolean; transcript_template: string; protocol_template: string;
   theme: Theme; language: LangSetting; notifications: boolean; developer_mode: boolean;
   /** Микрофон для записи: имя устройства; пусто — выбранный в системе. */
   input_device: string;
@@ -86,7 +86,10 @@ export type LiveState = {
   lines: { start: number; text: string }[]; drafts: number; protocol: string; seconds: number;
 };
 /** Ход записи с микрофона: сколько секунд записано и пиковая громкость (0…1). */
-export type RecordEvent = { recording_id: string; seconds: number; peak: number };
+/** `peak` — громкость микрофона, `system` — звука компьютера (только у записи встречи). */
+export type RecordEvent = { recording_id: string; seconds: number; peak: number; system?: number | null };
+/** Что записывать: только микрофон или видеовстречу — микрофон и звук компьютера. */
+export type RecordSource = "mic" | "meeting";
 export type ModelEvent = { name: string; progress: number; error: string };
 export type Stats = { recordings: number; seconds: number; terms: number; people: number; voices: number; rules: number };
 export type Hit = { id: string; snippet: string };
@@ -94,7 +97,7 @@ export type Doc = "transcript" | "protocol";
 export type Format = "md" | "docx";
 
 /** Пункты меню приложения и значка, которые выполняет окно. */
-export type MenuAction = "about" | "settings" | "add" | "folder" | "record";
+export type MenuAction = "about" | "settings" | "add" | "folder" | "record" | "meeting";
 
 export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
@@ -115,7 +118,7 @@ export const api = {
   stats: () => invoke<Stats>("stats"),
   transcript: (id: string) => invoke<Transcript>("get_transcript", { id }),
   live: () => invoke<LiveState[]>("live"),
-  startRecording: () => invoke<string>("start_recording"),
+  startRecording: (source: RecordSource = "mic") => invoke<string>("start_recording", { source }),
   /** `keep` — сохранить и расшифровать, иначе удалить записанное. */
   stopRecording: (id: string, keep = true) => invoke<void>("stop_recording", { id, keep }),
   inputDevices: () => invoke<string[]>("input_devices"),

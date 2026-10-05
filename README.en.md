@@ -10,8 +10,11 @@ minutes with decisions and action items. It runs on your own computer: recording
 ## What it does
 
 - **Records meetings and dictation.** Press "Record" — the text appears as the conversation goes, and once
-  you stop, the recording gets the full treatment: speakers, polishing, minutes. You can close the window:
+  you stop, the recording gets the full treatment: speakers, terms, minutes. You can close the window:
   the recording continues, and the menu bar icon stops it.
+- **Records video calls.** "Record Video Call" (⇧⌘R) captures your microphone together with the computer's
+  audio — the other side's voices from Zoom, Teams or Meet in the browser. No bot has to join the call.
+  On a Mac it needs macOS 14.4 or later.
 - **Transcribes audio and video.** Drop a file on the window — mp3, m4a, wav, mp4, mov and more.
   Speech recognition models to choose from: GigaAM v3, Whisper large-v3-turbo, Parakeet TDT 0.6B v3.
 - **Shows the text right away.** The transcript appears as it is recognized and the minutes are written
@@ -20,8 +23,6 @@ minutes with decisions and action items. It runs on your own computer: recording
   is recognized in future recordings.
 - **Spells terms and names correctly.** Add names, abbreviations and surnames to the glossary
   and they are written the way you need.
-- **Turns speech into written text.** The AI assistant fixes recognition errors, removes filler words
-  and backchannels, adds punctuation and splits the text into paragraphs — easy to read and share.
 - **Writes minutes.** The AI assistant collects the agenda, decisions and action items with owners
   and due dates, using your template.
 - **Saves to Markdown and Word.** Markdown is handy for AI tools and notes, Word for sending to colleagues.

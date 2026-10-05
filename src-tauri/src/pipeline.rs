@@ -1,4 +1,5 @@
-//! Конвейер: Ingest → Enhance → ASR → Diarize → Identify → Correct → Enrich → Render/Export.
+//! Конвейер: Ingest → Enhance → ASR → Diarize → Identify → Terms → Enrich → Render/Export.
+//! Текст расшифровки LLM не переписывает: она только пополняет справочники и составляет протокол.
 
 use crate::diar::{DiarModel, Diarizer};
 use crate::docx::{self, Field};
@@ -121,18 +122,21 @@ pub fn transcribe(
     for u in &mut t.utterances {
         u.text = fix_terms(&u.text, &aliases);
     }
-    if !settings.llm_enabled {
-        // Без LLM редактуры нет: текст — как распознан.
-        store.save_transcript(&t)?;
-        report.live(Live::Draft);
-    } else {
-        // Отредактированный текст появляется в окне по частям, по мере редактуры.
-        if let Err(e) = polish(store, &settings, &mut t, report) {
-            warnings.push(format!("{}: {e:#}", tr("Редактура текста не удалась", "Text polishing failed")));
-        }
+    // Текст — как распознан: LLM его не переписывает, только пополняет справочники.
+    store.save_transcript(&t)?;
+    report.live(Live::Draft);
+    if settings.llm_enabled {
         report.stage(Stage::Enrich, 0.0);
-        if let Err(e) = enrich(store, &settings, &t) {
-            warnings.push(format!("{}: {e:#}", tr("Справочники не пополнены", "Glossary and people were not updated")));
+        match enrich(store, &settings, &t) {
+            Ok(title) if settings.auto_title && !title.is_empty() => t.title = title,
+            Ok(_) => {}
+            Err(e) => warnings.push(format!("{}: {e:#}", tr("Справочники не пополнены", "Glossary and people were not updated"))),
+        }
+    }
+    // Пока шла расшифровка, пользователь мог дать записи своё название — оно главнее.
+    if store.is_renamed(id) {
+        if let Ok(r) = store.recording(id) {
+            t.title = r.title;
         }
     }
     store.save_transcript(&t)?;
@@ -380,37 +384,11 @@ fn knowledge_context(store: &Store, ru: bool) -> Result<String> {
 // Запросы к LLM — на языке записи: русские для русских записей, английские для остальных
 // (они просят отвечать на языке расшифровки).
 
-const POLISH_PROMPT: &str = "Ты литературный редактор. Тебе дают реплики из автоматической расшифровки разговора — с номерами и именами говорящих. В тексте есть ошибки распознавания речи, слова-паразиты, междометия, повторы, оговорки и оборванные фразы.
-Преврати КАЖДУЮ реплику в грамотный письменный текст:
-- исправь ошибки распознавания по смыслу и контексту разговора; термины, названия и ФИО пиши строго как в словаре и списке людей, с правильным склонением;
-- убери слова-паразиты (ну, вот, как бы, типа, значит, короче, это самое, в общем, так сказать), междометия и поддакивания (э-э, м-м, угу, ага), повторы и оговорки;
-- исправь грамматику, согласование, орфографию и пунктуацию; разговорные обрывки перестрой в законченные предложения;
-- сохрани смысл, факты, цифры, имена и порядок мыслей, речь от первого лица; не пересказывай, не сокращай содержание и не добавляй ничего от себя;
-- длинную реплику раздели на абзацы по смыслу — пустой строкой между ними;
-- если реплика — только поддакивание или заминка без смысла («Угу», «Ага», «Да-да», «Ну вот»), верни пустую строку; короткий ответ на вопрос («Да», «Нет») сохрани;
-- если говорящего перебили, а в следующей своей реплике он продолжает ту же фразу, не ставь точку в конце, а продолжение начни со строчной буквы.
-В поле text — только текст реплики, без номера и имени говорящего.
-Ответ строго в JSON: {\"items\": [{\"id\": 0, \"text\": \"...\"}]}";
-
-const POLISH_PROMPT_EN: &str = "You are a copy editor. You are given numbered utterances with speaker names from an automatic transcription of a conversation. The text contains speech recognition errors, filler words, hesitations, repetitions, slips of the tongue and broken-off phrases. Keep the language of the transcript: do not translate.
-Turn EVERY utterance into proper written text:
-- fix recognition errors using the meaning and the context of the conversation; spell terms and the names of organizations and people exactly as in the glossary and the list of people;
-- remove filler words (you know, like, I mean, sort of, basically), hesitations and backchannels (um, uh, er, mm-hmm, uh-huh), repetitions and slips of the tongue;
-- fix grammar, spelling and punctuation; rebuild conversational fragments into complete sentences;
-- keep the meaning, facts, numbers, names and the order of thoughts, in the speaker's own first person; do not summarize, shorten or add anything of your own;
-- split a long utterance into paragraphs by meaning, with an empty line between them;
-- if an utterance is nothing but a backchannel or a meaningless hesitation (\"Mm-hmm\", \"Uh-huh\", \"Yeah, yeah\"), return an empty string; keep a short answer to a question (\"Yes\", \"No\");
-- if a speaker was interrupted and continues the same sentence in their next utterance, do not end it with a period and start the continuation with a lowercase letter.
-The text field contains only the utterance itself, without its number or the speaker's name.
-Answer strictly in JSON: {\"items\": [{\"id\": 0, \"text\": \"...\"}]}";
-
-const POLISH_SCHEMA: &str = r#"{"type":"object","properties":{"items":{"type":"array","items":{"type":"object",
-"properties":{"id":{"type":"integer"},"text":{"type":"string"}},"required":["id","text"]}}},"required":["items"]}"#;
-
 const ENRICH_SCHEMA: &str = r#"{"type":"object","properties":{
 "terms":{"type":"array","items":{"type":"object","properties":{"term":{"type":"string"},"definition":{"type":"string"}},"required":["term","definition"]}},
-"people":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"role":{"type":"string"}},"required":["name","role"]}}},
-"required":["terms","people"]}"#;
+"people":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"role":{"type":"string"}},"required":["name","role"]}},
+"title":{"type":"string"}},
+"required":["terms","people","title"]}"#;
 
 /// JSON Schema протокола из меток шаблона — в порядке их следования в документе.
 fn protocol_schema(fields: &[Field]) -> String {
@@ -438,208 +416,21 @@ fn protocol_schema(fields: &[Field]) -> String {
     format!(r#"{{"type":"object","properties":{{{}}},"required":[{}]}}"#, props.join(","), req.join(","))
 }
 
-/// Сколько текста редактировать одним запросом и какой длины реплику собирать из подряд
-/// идущих реплик одного спикера, символов. Небольшие модели на длинных запросах путаются.
-const POLISH_BATCH: usize = 2000;
-const TURN_MAX: usize = 1500;
-
-/// Литературная редактура: подряд идущие реплики одного спикера — одним куском, LLM превращает
-/// их в грамотный письменный текст. Поддакивания и заминки выпадают, и соседние реплики
-/// одного спикера сливаются. Отредактированная часть сразу видна в окне; то, что LLM так и не
-/// смогла отредактировать, остаётся как распознано.
-fn polish(store: &Store, s: &Settings, t: &mut Transcript, report: &dyn Report) -> Result<()> {
-    let ru = t.is_russian();
-    let ctx = knowledge_context(store, ru)?;
-    let turns = group_turns(&t.utterances);
-    let batches: Vec<std::ops::Range<usize>> = {
-        let (mut out, mut from, mut len) = (vec![], 0, 0);
-        for (i, u) in turns.iter().enumerate() {
-            let limit = std::env::var("UT_BATCH").ok().and_then(|x| x.parse().ok()).unwrap_or(POLISH_BATCH); // BENCH
-            if len > 0 && len + u.text.len() > limit {
-                out.push(from..i);
-                (from, len) = (i, 0);
-            }
-            len += u.text.len();
-        }
-        if from < turns.len() {
-            out.push(from..turns.len());
-        }
-        out
-    };
-    let mut done: Vec<Utterance> = vec![];
-    let mut failure = None;
-    for (n, range) in batches.into_iter().enumerate() {
-        report.stage(Stage::Polish, range.start as f32 / turns.len().max(1) as f32);
-        let batch = &turns[range.clone()];
-        if failure.is_some() {
-            done.extend(batch.iter().cloned());
-            continue;
-        }
-        let before: Vec<&Utterance> = done.iter().rev().take(2).rev().collect();
-        let mut edited = edit_turns(s, t, ru, &ctx, &before, batch).unwrap_or_else(|_| vec![None; batch.len()]);
-        // Чего нет или что не похоже на свою реплику — по одной: так модель не путает номера.
-        for (i, u) in batch.iter().enumerate() {
-            if edited[i].is_some() {
-                continue;
-            }
-            let before: Vec<&Utterance> = done.iter().rev().take(2).rev().collect();
-            match edit_turns(s, t, ru, &ctx, &before, std::slice::from_ref(u)) {
-                Ok(e) => edited[i] = e.into_iter().next().flatten(),
-                // LLM недоступна: остаток текста — как распознан.
-                Err(e) if n == 0 && i == 0 => {
-                    failure = Some(e);
-                    break;
-                }
-                Err(_) => {}
-            }
-        }
-        for (u, e) in batch.iter().zip(edited) {
-            done.push(Utterance { clean: e.unwrap_or_else(|| u.text.clone()), ..u.clone() });
-        }
-        if failure.is_none() {
-            let mut shown = t.clone();
-            shown.utterances = finish_turns(done.clone());
-            store.save_transcript(&shown)?;
-            report.live(Live::Draft);
-        }
-    }
-    t.utterances = finish_turns(done);
-    match failure {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
-}
-
-/// Подряд идущие реплики одного спикера — одна, пока она не длиннее `TURN_MAX`.
-fn group_turns(utterances: &[Utterance]) -> Vec<Utterance> {
-    let mut out: Vec<Utterance> = vec![];
-    for u in utterances {
-        match out.last_mut() {
-            Some(p) if p.speaker == u.speaker && p.text.len() + u.text.len() < TURN_MAX => {
-                p.raw = format!("{} {}", p.raw, u.raw);
-                p.text = format!("{} {}", p.text, u.text);
-                p.end = u.end;
-            }
-            _ => out.push(u.clone()),
-        }
-    }
-    out
-}
-
-/// После редактуры: пустые реплики (поддакивания, заминки) выпадают, соседние реплики одного
-/// спикера сливаются — продолжение перебитой фразы без разрыва, остальное новым абзацем.
-fn finish_turns(turns: Vec<Utterance>) -> Vec<Utterance> {
-    let mut out: Vec<Utterance> = vec![];
-    for u in turns.into_iter().filter(|u| !u.clean.trim().is_empty()) {
-        match out.last_mut() {
-            Some(p) if p.speaker == u.speaker => {
-                let continues = !p.clean.trim_end().ends_with(['.', '!', '?', '…', ':', '»', '"', ')']);
-                p.clean = format!("{}{}{}", p.clean.trim_end(), if continues { " " } else { "\n\n" }, u.clean.trim_start());
-                p.raw = format!("{} {}", p.raw, u.raw);
-                p.text = format!("{} {}", p.text, u.text);
-                p.end = u.end;
-            }
-            _ => out.push(u),
-        }
-    }
-    for (i, u) in out.iter_mut().enumerate() {
-        u.id = i;
-    }
-    out
-}
-
-/// Редактура нескольких реплик одним запросом. Для каждой — текст или None, если модель её
-/// пропустила либо вернула текст, не похожий на эту реплику.
-fn edit_turns(
-    s: &Settings,
-    t: &Transcript,
-    ru: bool,
-    ctx: &str,
-    before: &[&Utterance],
-    batch: &[Utterance],
-) -> Result<Vec<Option<String>>> {
-    let (prompt, context, heading) = if ru {
-        (POLISH_PROMPT, "Предыдущие реплики (уже отредактированы, только для связи — их не возвращай)", "Реплики")
-    } else {
-        (POLISH_PROMPT_EN, "Previous utterances (already edited, only for context — do not return them)", "Utterances")
-    };
-    let mut user = format!("{ctx}\n");
-    if !before.is_empty() {
-        user.push_str(&format!("{context}:\n"));
-        for u in before {
-            let tail: String = u.clean.chars().rev().take(600).collect::<Vec<_>>().into_iter().rev().collect();
-            user.push_str(&format!("{}: {}\n", t.speaker_name(&u.speaker), tail.replace("\n\n", " ")));
-        }
-        user.push('\n');
-    }
-    user.push_str(&format!("{heading}:\n"));
-    for (i, u) in batch.iter().enumerate() {
-        user.push_str(&format!("[{i}] {}: {}\n", t.speaker_name(&u.speaker), u.text));
-    }
-    let t0 = std::time::Instant::now(); // BENCH
-    let resp = llm::chat_json(s, prompt, &user, POLISH_SCHEMA)?;
-    let mut out = vec![None; batch.len()];
-    for item in resp["items"].as_array().into_iter().flatten() {
-        let Some(i) = item["id"].as_u64().map(|x| x as usize).filter(|&i| i < batch.len()) else { continue };
-        let Some(text) = item["text"].as_str() else { continue };
-        // Небольшие модели иногда повторяют «[номер] Имя:» из входа — срезаем.
-        let name = format!("{}:", t.speaker_name(&batch[i].speaker));
-        let text = text.trim().trim_start_matches(&format!("[{i}]")).trim().trim_start_matches(name.as_str()).trim();
-        let text = tidy_paragraphs(text);
-        if out[i].is_none() && plausible(&batch[i].text, &text) {
-            out[i] = Some(text);
-        } else if std::env::var_os("UT_BENCH").is_some() { // BENCH
-            eprintln!("  REJECT [{i}] {:?}\n      -> {:?}", batch[i].text, text); // BENCH
-        }
-    }
-    if std::env::var_os("UT_BENCH").is_some() { // BENCH
-        eprintln!("CALL n={} in={}ch {:.1}s ok={}", batch.len(), user.len(), t0.elapsed().as_secs_f32(), out.iter().filter(|x| x.is_some()).count()); // BENCH
-    } // BENCH
-    Ok(out)
-}
-
-/// Абзацы разделены ровно одной пустой строкой, лишних пробелов нет.
-fn tidy_paragraphs(text: &str) -> String {
-    text.split("\n\n")
-        .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|p| !p.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-/// Похож ли ответ LLM на редактуру именно этой реплики: небольшие модели путают номера и
-/// подставляют текст соседней. Сравниваем значимые слова по началу (падежи не мешают):
-/// хотя бы половина слов ответа должна быть из исходника. Пустой ответ годится, только
-/// если и в исходнике почти ничего нет.
-fn plausible(source: &str, edited: &str) -> bool {
-    let words = |s: &str| -> Vec<String> {
-        s.split(|c: char| !c.is_alphanumeric())
-            .filter(|w| w.chars().count() >= 4)
-            .map(|w| w.to_lowercase().chars().take(5).collect())
-            .collect()
-    };
-    let (src, out) = (words(source), words(edited));
-    if out.is_empty() {
-        return src.len() <= 3;
-    }
-    let known: HashSet<&String> = src.iter().collect();
-    let hits = out.iter().filter(|w| known.contains(w)).count();
-    out.len() <= src.len() * 2 + 4 && hits * 2 >= out.len()
-}
-
 const ENRICH_PROMPT_EN: &str = "You keep the glossary and the list of people for meeting transcripts. Find NEW entities in the text that are not among the already known ones:
 - terms: special terms, abbreviations, names of organizations, projects, products and documents; definition is a short explanation from the context or an empty string. Do NOT suggest common words (request, budget, report, meeting, project, deadline) — only what a speech recognition model may misspell;
-- people: people mentioned by their last name or full name; role is their position or role from the context.
-Use the base form of words. Do not make anything up. Answer strictly in JSON: {\"terms\": [{\"term\": \"\", \"definition\": \"\"}], \"people\": [{\"name\": \"\", \"role\": \"\"}]}";
+- people: people mentioned by their last name or full name; role is their position or role from the context;
+- title: a short title of the recording by its content, 3 to 7 words, in the language of the text, like a document name (\"Q3 budget review\", \"Interview with a backend developer\"): no date, no quotes, no period at the end.
+Use the base form of words. Do not make anything up. Answer strictly in JSON: {\"terms\": [{\"term\": \"\", \"definition\": \"\"}], \"people\": [{\"name\": \"\", \"role\": \"\"}], \"title\": \"\"}";
 
 const ENRICH_PROMPT: &str = "Ты ведёшь справочники для расшифровки совещаний. Найди в тексте НОВЫЕ сущности, которых нет в уже известных:
 - terms: специальные термины, аббревиатуры, названия организаций, проектов, продуктов, документов; definition — краткое пояснение из контекста или пустая строка. НЕ предлагай общеупотребительные слова (заявка, смета, отчёт, совещание, проект, срок, бюджет) — только то, что модель распознавания может написать неправильно;
-- people: упомянутые люди с фамилией или полным именем; role — должность или роль из контекста.
-Пиши в начальной форме (именительный падеж). Не выдумывай. Ответ строго в JSON: {\"terms\": [{\"term\": \"\", \"definition\": \"\"}], \"people\": [{\"name\": \"\", \"role\": \"\"}]}";
+- people: упомянутые люди с фамилией или полным именем; role — должность или роль из контекста;
+- title: короткое название записи по её содержанию, 3–7 слов, как заголовок документа («Согласование сметы на ремонт», «Собеседование с бэкенд-разработчиком»): без даты, без кавычек и точки в конце.
+Пиши в начальной форме (именительный падеж). Не выдумывай. Ответ строго в JSON: {\"terms\": [{\"term\": \"\", \"definition\": \"\"}], \"people\": [{\"name\": \"\", \"role\": \"\"}], \"title\": \"\"}";
 
 /// Новые термины и люди сразу попадают в справочники — на проверку пользователю
-/// (или без неё, если так настроено).
-fn enrich(store: &Store, s: &Settings, t: &Transcript) -> Result<()> {
+/// (или без неё, если так настроено). Возвращает название записи по содержанию (может быть пустым).
+fn enrich(store: &Store, s: &Settings, t: &Transcript) -> Result<String> {
     let known_terms: Vec<String> = store.terms()?.into_iter().map(|x| x.term.to_lowercase()).collect();
     let known_people: Vec<String> = store.people()?.into_iter().map(|x| x.name.to_lowercase()).collect();
     let text: String = t.as_dialogue(false).chars().take(llm::prompt_budget(s).min(30_000)).collect();
@@ -670,7 +461,16 @@ fn enrich(store: &Store, s: &Settings, t: &Transcript) -> Result<()> {
             store.propose("person", &name, &pick(x, "role"), &t.id, pending)?;
         }
     }
-    Ok(())
+    Ok(clean_title(&pick(&resp, "title")))
+}
+
+/// Название от LLM — одной строкой, без кавычек, точки в конце и лишней длины.
+fn clean_title(raw: &str) -> String {
+    let line = raw.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let quotes: &[char] = &['"', '\'', '«', '»', '“', '”', '„', '`'];
+    let title = line.trim_end_matches(['.', ';', ':']).trim_matches(quotes).trim_end_matches(['.', ';', ':']).trim();
+    let title: String = title.chars().take(100).collect();
+    capitalize(title.trim())
 }
 
 // ---------- протокол ----------
@@ -1061,67 +861,13 @@ fn snippet(text: &str, needle: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    /// Стенд редактуры (BENCH): UT_POLISH_JSON — расшифровка, UT_POLISH_MODEL — встроенная модель,
-    /// результат — в UT_POLISH_OUT.
-    #[test]
-    #[ignore]
-    fn polish_bench() {
-        struct Quiet;
-        impl Report for Quiet {
-            fn stage(&self, _: Stage, _: f32) {}
-            fn live(&self, _: Live) {}
-        }
-        std::env::set_var("UT_DATA_DIR", std::env::temp_dir().join("ut-polish-bench"));
-        let mut t: Transcript = serde_json::from_str(&std::fs::read_to_string(std::env::var("UT_POLISH_JSON").unwrap()).unwrap()).unwrap();
-        let store = Store::open().unwrap();
-        let mut s = store.settings();
-        s.llm_enabled = true;
-        s.llm_provider = store::LlmProvider::Builtin;
-        s.llm_local_model = std::env::var("UT_POLISH_MODEL").unwrap();
-        let t0 = std::time::Instant::now();
-        let r = polish(&store, &s, &mut t, &Quiet);
-        eprintln!("TOTAL {:.0}s {:?} utterances={}", t0.elapsed().as_secs_f32(), r.err(), t.utterances.len());
-        std::fs::write(std::env::var("UT_POLISH_OUT").unwrap(), serde_json::to_string_pretty(&t).unwrap()).unwrap();
-    }
-
     use super::*;
 
-    fn turn(speaker: &str, text: &str, clean: &str) -> Utterance {
-        Utterance { speaker: speaker.into(), text: text.into(), clean: clean.into(), ..Default::default() }
-    }
-
     #[test]
-    fn rejects_text_of_another_utterance() {
-        let source = "Ну, типа там. Ну, каких-то из прогнозов подоставать. Угу. Какая доля будет?";
-        assert!(plausible(source, "Нужно взять данные из прогнозов: какая доля будет?"));
-        assert!(!plausible(source, "Это надо подчеркнуть на том слайде, который есть. Портал как сборка отраслей."));
-        assert!(plausible("Угу.", ""), "поддакивание можно убрать");
-        assert!(plausible("Физически, наверное, нет. Да.", "Физически, наверное, нет."));
-        assert!(!plausible("Подрядчик задерживает поставку серверов, запуск переносится на апрель.", ""));
-    }
-
-    #[test]
-    fn backchannels_drop_out_and_the_speaker_continues() {
-        let turns = vec![
-            turn("S2", "первое море будущего", "Первое — «Море будущего»."),
-            turn("S1", "угу", ""),
-            turn("S2", "второе вот логистика", "Второе — логистика и перевозки"),
-            turn("S1", "угу", ""),
-            turn("S2", "именно в части маршрутов", "в части маршрутов."),
-            turn("S1", "да", "Да."),
-        ];
-        let out = finish_turns(turns);
-        let clean: Vec<(&str, &str)> = out.iter().map(|u| (u.speaker.as_str(), u.clean.as_str())).collect();
-        assert_eq!(clean, [("S2", "Первое — «Море будущего».\n\nВторое — логистика и перевозки в части маршрутов."), ("S1", "Да.")]);
-        assert_eq!((out[0].id, out[1].id), (0, 1));
-    }
-
-    #[test]
-    fn one_speaker_in_a_row_is_one_turn() {
-        let u = [turn("S1", "раз", ""), turn("S1", "два", ""), turn("S2", "три", ""), turn("S1", &"слово ".repeat(300), "")];
-        let turns = group_turns(&u);
-        assert_eq!(turns.iter().map(|t| t.speaker.as_str()).collect::<Vec<_>>(), ["S1", "S2", "S1"]);
-        assert_eq!(turns[0].text, "раз два");
+    fn title_from_llm_is_one_clean_line() {
+        assert_eq!(clean_title("  «согласование сметы на ремонт».\nещё строка"), "Согласование сметы на ремонт");
+        assert_eq!(clean_title("\"Q3 budget review\""), "Q3 budget review");
+        assert_eq!(clean_title(""), "");
     }
 
     #[test]

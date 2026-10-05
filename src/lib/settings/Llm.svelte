@@ -77,6 +77,12 @@
     </div>
   </Group>
 
+  <Group>
+    <Row label={t("set.llm.title")} hint={t("set.llm.titleHint")}>
+      <Toggle bind:checked={s.auto_title} onchange={save} label={t("set.llm.title")} />
+    </Row>
+  </Group>
+
   <Group title={t("set.llm.directories")}>
     <Row label={t("set.llm.auto")} hint={t("set.llm.autoHint")}>
       <Toggle bind:checked={s.auto_accept_suggestions} onchange={save} label={t("set.llm.auto")} />

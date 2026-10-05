@@ -3,7 +3,7 @@
 //! `--raw` — без предобработки звука (шумоподавления и выравнивания громкости);
 //! `--lang` — язык записи для Whisper и Parakeet (ru, en… или auto); `--live` — печатать текст по мере распознавания.
 //! Вместо файла — `--record <секунд>`: запись с микрофона (`--mic <имя>` — какого) с текстом на ходу,
-//! затем обычный конвейер; `--devices` — список микрофонов.
+//! затем обычный конвейер; `--meeting` — вместе со звуком компьютера; `--devices` — список микрофонов.
 
 use std::sync::{mpsc, Arc};
 use ultra_transcript_lib::pipeline::Live;
@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
         .map(String::as_str)
         .unwrap_or("");
     if file.is_empty() && record.is_none() {
-        anyhow::bail!("использование: ut <файл> [--protocol] [--whisper|--parakeet] [--diar <движок>] [--threshold <порог>] [--llm <модель>] [--raw] [--live] | ut --record <секунд> [--mic <имя>] | ut --devices");
+        anyhow::bail!("использование: ut <файл> [--protocol] [--whisper|--parakeet] [--diar <движок>] [--threshold <порог>] [--llm <модель>] [--raw] [--live] | ut --record <секунд> [--mic <имя>] [--meeting] | ut --devices");
     }
     let raw = args.iter().any(|a| a == "--raw");
     // Своя библиотека во временной папке: CLI не должен подхватывать задачи
@@ -68,7 +68,7 @@ fn main() -> anyhow::Result<()> {
     }
     settings.speech_language = value("--lang").cloned().unwrap_or_else(|| "ru".into());
     settings.input_device = value("--mic").cloned().unwrap_or_default();
-    // --llm <модель из каталога>: редактура, справочники и протокол встроенной LLM.
+    // --llm <модель из каталога>: справочники и протокол встроенной LLM.
     if let Some(i) = args.iter().position(|a| a == "--llm") {
         settings.llm_enabled = true;
         settings.llm_provider = ultra_transcript_lib::store::LlmProvider::Builtin;
@@ -78,7 +78,12 @@ fn main() -> anyhow::Result<()> {
     let id = match record {
         // Запись с микрофона: по таймеру останавливается сама, дальше — как с файлом.
         Some(secs) => {
-            let id = svc.start_recording()?;
+            let source = if args.iter().any(|a| a == "--meeting") {
+                ultra_transcript_lib::record::Source::Meeting
+            } else {
+                ultra_transcript_lib::record::Source::Mic
+            };
+            let id = svc.start_recording(source)?;
             eprintln!("запись {secs} с: говорите");
             let (svc2, id2) = (svc.clone(), id.clone());
             std::thread::spawn(move || {
@@ -104,7 +109,8 @@ fn main() -> anyhow::Result<()> {
                 continue;
             }
             Signal::Record(r) if live && r.recording_id == id => {
-                eprint!("\r    {:.1} с, громкость {:>3.0}%   ", r.seconds, r.peak * 100.0);
+                let system = r.system.map(|p| format!(", компьютер {:>3.0}%", p * 100.0)).unwrap_or_default();
+                eprint!("\r    {:.1} с, громкость {:>3.0}%{system}   ", r.seconds, r.peak * 100.0);
                 continue;
             }
             Signal::Record(_) => continue,
@@ -139,7 +145,7 @@ fn main() -> anyhow::Result<()> {
     }
     for u in &t.utterances {
         println!("[{}] {}: {}", ultra_transcript_lib::transcript::fmt_time(u.start), t.speaker_name(&u.speaker), u.text);
-        if u.clean != u.text { println!("        ~ {}", u.clean); }
+        if !u.clean.is_empty() && u.clean != u.text { println!("        ~ {}", u.clean); }
     }
     println!("\nпапка: {}", store.recording_dir(&id).display());
     ultra_transcript_lib::local_llm::unload(); // иначе llama.cpp падает при выходе, освобождая видеопамять

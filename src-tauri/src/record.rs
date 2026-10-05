@@ -1,7 +1,13 @@
 //! Запись с микрофона с расшифровкой на ходу. Звук с устройства (cpal) приводится к 16 кГц
 //! и пишется в WAV-файл в папке записи; параллельно поиск речи режет его на фразы, и каждая
 //! сразу распознаётся — текст появляется в окне, пока идёт разговор. После остановки файл
-//! проходит обычный конвейер целиком: шумоподавление, спикеры, редактура, протокол.
+//! проходит обычный конвейер целиком: шумоподавление, спикеры, протокол.
+//!
+//! Запись встречи добавляет к микрофону звук компьютера — собеседников из Zoom, Телемоста,
+//! браузера. На Mac — глобальный Core Audio process tap всех процессов (systap.rs; macOS 14.4+,
+//! отдельное разрешение «Запись системного звука»), на Windows — WASAPI loopback, который cpal
+//! снимает с устройства вывода.
+//! Оба потока сводятся в один моно-файл.
 
 use crate::lang::tr;
 use crate::media::SAMPLE_RATE;
@@ -9,6 +15,8 @@ use crate::speech::Engines;
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample};
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
@@ -34,18 +42,33 @@ pub fn input_devices() -> Vec<String> {
     names
 }
 
-/// Открытый поток с микрофона: звук приходит в `rx` кусками, моно, с частотой `rate`.
-/// Поток живёт, пока жив `Capture`.
+/// Что записывать.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    /// Только микрофон: диктовка, разговор в комнате.
+    #[default]
+    Mic,
+    /// Микрофон и звук компьютера: видеовстреча.
+    Meeting,
+}
+
+/// Открытые потоки: микрофон (дорожка 0) и, для встречи, звук компьютера (дорожка 1).
+/// Звук приходит в `rx` кусками `(дорожка, моно-отсчёты)` с частотой своей дорожки из `rates`.
+/// Потоки живут, пока жив `Capture`.
 pub struct Capture {
-    _stream: cpal::Stream,
-    pub rx: Receiver<Vec<f32>>,
-    pub rate: u32,
+    _streams: Vec<cpal::Stream>,
+    /// Глобальный tap звука компьютера; уничтожается после потоков.
+    #[cfg(target_os = "macos")]
+    _tap: Option<crate::systap::GlobalTap>,
+    rx: Receiver<(usize, Vec<f32>)>,
+    rates: Vec<u32>,
     pub device: String,
 }
 
 impl Capture {
     /// `device` — имя микрофона из `input_devices`; пусто — выбранный в системе.
-    pub fn open(device: &str) -> Result<Self> {
+    pub fn open(device: &str, source: Source) -> Result<Self> {
         let host = cpal::default_host();
         let dev = if device.is_empty() {
             host.default_input_device()
@@ -57,24 +80,91 @@ impl Capture {
         .ok_or_else(|| anyhow!(tr("микрофон не найден", "no microphone found")))?;
         let name = dev.description().map(|d| d.name().to_string()).unwrap_or_default();
         let supported = dev.default_input_config().context(tr("микрофон недоступен", "the microphone is unavailable"))?;
-        let format = supported.sample_format();
-        let config: cpal::StreamConfig = supported.into();
         let (tx, rx) = channel();
-        let channels = config.channels as usize;
-        let stream = match format {
-            cpal::SampleFormat::F32 => build::<f32>(&dev, &config, channels, tx)?,
-            cpal::SampleFormat::I16 => build::<i16>(&dev, &config, channels, tx)?,
-            cpal::SampleFormat::I32 => build::<i32>(&dev, &config, channels, tx)?,
-            cpal::SampleFormat::U16 => build::<u16>(&dev, &config, channels, tx)?,
-            other => anyhow::bail!("{}: {other:?}", tr("неподдерживаемый формат звука", "unsupported sample format")),
-        };
+        let mut streams = vec![];
+        let mut rates = vec![];
+        let (stream, rate) = open_stream(&dev, supported, 0, tx.clone())?;
         stream.play().context(tr("не удалось начать запись", "could not start recording"))?;
-        Ok(Self { _stream: stream, rx, rate: config.sample_rate, device: name })
+        streams.push(stream);
+        rates.push(rate);
+        #[cfg(target_os = "macos")]
+        let mut tap = None;
+        let mut out: Option<cpal::Device> = None;
+        if source == Source::Meeting {
+            // Вход на устройстве вывода — это запись того, что оно играет.
+            let system = tr("звук компьютера недоступен", "computer audio is unavailable");
+            // На Mac — глобальный tap всех процессов: tap устройства вывода, который делает cpal,
+            // не слышит Safari в звонке (см. systap.rs). Если не вышло — прежний путь.
+            #[cfg(target_os = "macos")]
+            match global_tap(&host) {
+                Ok(found) => (tap, out) = (Some(found.0), Some(found.1)),
+                Err(e) => eprintln!("глобальный tap звука компьютера: {e:#}"),
+            }
+            let (out, supported) = match out {
+                Some(dev) => {
+                    let supported = dev.default_input_config().context(system)?;
+                    (dev, supported)
+                }
+                None => {
+                    let dev = host.default_output_device().ok_or_else(|| anyhow!(system))?;
+                    let supported = dev.default_output_config().context(system)?;
+                    (dev, supported)
+                }
+            };
+            let (stream, rate) = open_stream(&out, supported, 1, tx).with_context(|| {
+                format!("{system}{}", if cfg!(target_os = "macos") { tr(" (нужна macOS 14.4 или новее)", " (macOS 14.4 or later is required)") } else { "" })
+            })?;
+            stream.play().context(system)?;
+            streams.push(stream);
+            rates.push(rate);
+        }
+        Ok(Self {
+            _streams: streams,
+            #[cfg(target_os = "macos")]
+            _tap: tap,
+            rx,
+            rates,
+            device: name,
+        })
+    }
+
+    /// Пишется ли звук компьютера.
+    pub fn system(&self) -> bool {
+        self.rates.len() > 1
     }
 }
 
+/// Глобальный tap и его агрегатное устройство как вход cpal (частное устройство видно
+/// только нашему процессу — среди его входов).
+#[cfg(target_os = "macos")]
+pub(crate) fn global_tap(host: &cpal::Host) -> Result<(crate::systap::GlobalTap, cpal::Device)> {
+    let tap = crate::systap::GlobalTap::new()?;
+    // Новое устройство появляется в списке не сразу.
+    for _ in 0..40 {
+        if let Some(dev) = host.input_devices()?.find(|d| d.description().ok().is_some_and(|x| x.name() == tap.name)) {
+            return Ok((tap, dev));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    Err(anyhow!("aggregate device not found"))
+}
+
+fn open_stream(dev: &cpal::Device, supported: cpal::SupportedStreamConfig, lane: usize, tx: Sender<(usize, Vec<f32>)>) -> Result<(cpal::Stream, u32)> {
+    let format = supported.sample_format();
+    let config: cpal::StreamConfig = supported.into();
+    let channels = config.channels as usize;
+    let stream = match format {
+        cpal::SampleFormat::F32 => build::<f32>(dev, &config, channels, lane, tx)?,
+        cpal::SampleFormat::I16 => build::<i16>(dev, &config, channels, lane, tx)?,
+        cpal::SampleFormat::I32 => build::<i32>(dev, &config, channels, lane, tx)?,
+        cpal::SampleFormat::U16 => build::<u16>(dev, &config, channels, lane, tx)?,
+        other => anyhow::bail!("{}: {other:?}", tr("неподдерживаемый формат звука", "unsupported sample format")),
+    };
+    Ok((stream, config.sample_rate))
+}
+
 /// Поток захвата: каналы сводятся в моно, кусок уходит в канал как есть (частота устройства).
-fn build<T>(dev: &cpal::Device, config: &cpal::StreamConfig, channels: usize, tx: Sender<Vec<f32>>) -> Result<cpal::Stream>
+fn build<T>(dev: &cpal::Device, config: &cpal::StreamConfig, channels: usize, lane: usize, tx: Sender<(usize, Vec<f32>)>) -> Result<cpal::Stream>
 where
     T: SizedSample,
     f32: FromSample<T>,
@@ -86,12 +176,54 @@ where
                 .chunks(channels.max(1))
                 .map(|frame| frame.iter().map(|&x| f32::from_sample_(x)).sum::<f32>() / frame.len() as f32)
                 .collect();
-            let _ = tx.send(mono);
+            let _ = tx.send((lane, mono));
         },
-        |e| eprintln!("микрофон: {e}"),
+        move |e| eprintln!("{}: {e}", if lane == 0 { "микрофон" } else { "звук компьютера" }),
         None,
     )?;
     Ok(stream)
+}
+
+// ---------- сведение дорожек ----------
+
+/// Насколько одна дорожка может отстать от другой, отсчётов 16 кГц. Дальше отставшая
+/// считается замолчавшей (устройство отключили, звук перестал идти) и дополняется тишиной,
+/// чтобы запись не вставала.
+const MAX_LAG: usize = SAMPLE_RATE as usize / 2;
+
+/// Сводит дорожки (уже 16 кГц) в одну: складывает отсчёт к отсчёту по мере того, как
+/// приходят все дорожки.
+struct Mixer {
+    lanes: Vec<VecDeque<f32>>,
+}
+
+impl Mixer {
+    fn new(lanes: usize) -> Self {
+        Self { lanes: (0..lanes).map(|_| VecDeque::new()).collect() }
+    }
+
+    fn push(&mut self, lane: usize, samples: &[f32]) {
+        self.lanes[lane].extend(samples);
+    }
+
+    /// Сведённое, что уже можно отдать; `all` — отдать всё, дополнив короткие дорожки тишиной.
+    fn take(&mut self, all: bool) -> Vec<f32> {
+        let longest = self.lanes.iter().map(VecDeque::len).max().unwrap_or(0);
+        let floor = if all { longest } else { longest.saturating_sub(MAX_LAG) };
+        for lane in &mut self.lanes {
+            if lane.len() < floor {
+                lane.resize(floor, 0.0);
+            }
+        }
+        let n = self.lanes.iter().map(VecDeque::len).min().unwrap_or(0);
+        let mut out = vec![0.0f32; n];
+        for lane in &mut self.lanes {
+            for (o, x) in out.iter_mut().zip(lane.drain(..n)) {
+                *o += x;
+            }
+        }
+        out
+    }
 }
 
 // ---------- WAV ----------
@@ -171,8 +303,9 @@ fn header(data: u32) -> [u8; HEADER] {
 pub trait Listen {
     /// Распознана фраза, начавшаяся на `start`-й секунде записи.
     fn text(&self, start: f32, text: String);
-    /// Сколько секунд записано и пиковая громкость (0…1) за последнее время.
-    fn tick(&self, seconds: f32, peak: f32);
+    /// Сколько секунд записано и пиковая громкость (0…1) за последнее время: микрофона
+    /// и, если пишется, звука компьютера.
+    fn tick(&self, seconds: f32, peak: f32, system: Option<f32>);
 }
 
 const TICK: Duration = Duration::from_millis(200);
@@ -180,14 +313,21 @@ const TICK: Duration = Duration::from_millis(200);
 /// Пишет звук из `capture` в `wav`, распознавая фразы по мере появления, пока не поднят `stop`.
 /// Возвращает длительность записи в секундах.
 pub fn run(capture: &Capture, engines: &Engines, wav: &mut Wav, stop: &AtomicBool, listen: &dyn Listen) -> Result<f32> {
-    let resampler = (capture.rate != SAMPLE_RATE as u32)
-        .then(|| sherpa_onnx::LinearResampler::create(capture.rate as i32, SAMPLE_RATE))
-        .map(|r| r.ok_or_else(|| anyhow!(tr("не удалось создать ресемплер", "could not create a resampler"))))
-        .transpose()?;
+    let resamplers = capture
+        .rates
+        .iter()
+        .map(|&rate| {
+            (rate != SAMPLE_RATE as u32)
+                .then(|| sherpa_onnx::LinearResampler::create(rate as i32, SAMPLE_RATE))
+                .map(|r| r.ok_or_else(|| anyhow!(tr("не удалось создать ресемплер", "could not create a resampler"))))
+                .transpose()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut mixer = Mixer::new(capture.rates.len());
     let vad = engines.vad()?;
     // VAD принимает окна по 512 отсчётов; хвост ждёт следующего куска.
     let mut pending: Vec<f32> = vec![];
-    let (mut peak, mut last_tick) = (0.0f32, Instant::now());
+    let (mut peaks, mut last_tick) = (vec![0.0f32; capture.rates.len()], Instant::now());
     let recognize = |vad: &sherpa_onnx::VoiceActivityDetector| {
         while !vad.is_empty() {
             if let Some(seg) = vad.front() {
@@ -210,13 +350,15 @@ pub fn run(capture: &Capture, engines: &Engines, wav: &mut Wav, stop: &AtomicBoo
             Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => anyhow::bail!(tr("микрофон отключился", "the microphone was disconnected")),
         };
-        if let Some(chunk) = chunk {
-            let samples = match &resampler {
+        if let Some((lane, chunk)) = chunk {
+            let samples = match &resamplers[lane] {
                 Some(r) => r.resample(&chunk, false),
                 None => chunk,
             };
+            peaks[lane] = samples.iter().fold(peaks[lane], |m, x| m.max(x.abs()));
+            mixer.push(lane, &samples);
+            let samples = mixer.take(false);
             wav.write(&samples)?;
-            peak = samples.iter().fold(peak, |m, x| m.max(x.abs()));
             pending.extend_from_slice(&samples);
             let whole = pending.len() / 512 * 512;
             for w in pending[..whole].chunks(512) {
@@ -226,19 +368,23 @@ pub fn run(capture: &Capture, engines: &Engines, wav: &mut Wav, stop: &AtomicBoo
             recognize(&vad);
         }
         if last_tick.elapsed() >= TICK {
-            listen.tick(wav.seconds(), peak.min(1.0));
-            (peak, last_tick) = (0.0, Instant::now());
+            listen.tick(wav.seconds(), peaks[0].min(1.0), peaks.get(1).map(|p| p.min(1.0)));
+            peaks.iter_mut().for_each(|p| *p = 0.0);
+            last_tick = Instant::now();
         }
         if stop.load(Ordering::Relaxed) {
             break;
         }
     }
-    // Хвост: что осталось в ресемплере и в поиске речи.
-    if let Some(r) = &resampler {
-        let tail = r.resample(&[], true);
-        wav.write(&tail)?;
-        pending.extend_from_slice(&tail);
+    // Хвост: что осталось в ресемплерах, в сведении и в поиске речи.
+    for (lane, r) in resamplers.iter().enumerate() {
+        if let Some(r) = r {
+            mixer.push(lane, &r.resample(&[], true));
+        }
     }
+    let tail = mixer.take(true);
+    wav.write(&tail)?;
+    pending.extend_from_slice(&tail);
     vad.accept_waveform(&pending);
     vad.flush();
     recognize(&vad);
@@ -248,6 +394,26 @@ pub fn run(capture: &Capture, engines: &Engines, wav: &mut Wav, stop: &AtomicBoo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mixer_sums_lanes_and_does_not_wait_for_a_silent_one() {
+        let mut m = Mixer::new(2);
+        m.push(0, &[0.1, 0.2, 0.3]);
+        assert!(m.take(false).is_empty(), "вторая дорожка ещё не пришла");
+        m.push(1, &[0.5, 0.5]);
+        let out = m.take(false);
+        assert_eq!(out.len(), 2);
+        assert!((out[0] - 0.6).abs() < 1e-6 && (out[1] - 0.7).abs() < 1e-6);
+        // Вторая дорожка замолчала: первая уходит с задержкой не больше MAX_LAG.
+        m.push(0, &vec![0.0; MAX_LAG + 99]);
+        assert_eq!(m.take(false).len(), 100);
+        assert_eq!(m.take(true).len(), MAX_LAG);
+        assert!(m.take(true).is_empty());
+        // Одна дорожка — как есть.
+        let mut one = Mixer::new(1);
+        one.push(0, &[0.25; 7]);
+        assert_eq!(one.take(false), vec![0.25; 7]);
+    }
 
     #[test]
     fn wav_header_is_patched_on_finish_and_repair() {

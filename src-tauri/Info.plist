@@ -13,5 +13,8 @@
   <!-- Запись с микрофона: без этой строки система не спросит разрешения и звука не будет. -->
   <key>NSMicrophoneUsageDescription</key>
   <string>Для записи встреч и диктовок с расшифровкой на ходу · To record meetings and dictation with live transcription</string>
+  <!-- Запись видеовстреч: звук компьютера через Core Audio process tap (macOS 14.4+). -->
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Для записи видеовстреч: голоса собеседников из Zoom, Телемоста, браузера · To record video calls: the other side's voices from Zoom, Teams, the browser</string>
 </dict>
 </plist>

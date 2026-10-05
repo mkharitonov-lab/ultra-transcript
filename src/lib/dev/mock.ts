@@ -25,7 +25,7 @@ const settings: Settings = {
   llm_enabled: !new URLSearchParams(location.search).has("fresh"), llm_provider: "builtin", llm_local_model: "gigachat-lightning",
   llm_base_url: "http://localhost:11434/v1", llm_model: "qwen3:8b", llm_api_key: "",
   diar_model: "pyannote3", cluster_threshold: 0.4, voice_threshold: 0.55, archive_kbps: 24,
-  auto_accept_suggestions: false, transcript_template: "", protocol_template: "",
+  auto_accept_suggestions: false, auto_title: true, transcript_template: "", protocol_template: "",
   theme: "system", language: "system", notifications: true, developer_mode: false, input_device: "",
 };
 
@@ -66,7 +66,7 @@ const rec = (id: string, title: string, days: number, duration: number, extra: P
 });
 let recordings: Recording[] = [
   rec("r1", "Совещание по заявке в Минпромторг", 0, 2471, { has_protocol: true, folder_id: 1 }),
-  rec("r2", "Планёрка 28 сентября", 0, 1312, { error: "Редактура текста не удалась: языковая модель недоступна" }),
+  rec("r2", "Планёрка 28 сентября", 0, 1312, { error: "Протокол не составлен: языковая модель недоступна" }),
   rec("r3", "Интервью с главным инженером", 1, 3605, { folder_id: 2 }),
   rec("r4", "Лекция: компьютерное зрение", 3, 5400),
   rec("r5", "Созвон с подрядчиком", 6, 940, { folder_id: 1 }),
@@ -108,10 +108,11 @@ function transcript(r: Recording, withProtocol = r.has_protocol): Transcript {
       { id: "S2", name: "Спикер 2", person_id: null, similarity: null },
       { id: "S3", name: "Смирнова Анна", person_id: 2, similarity: null },
     ],
-    utterances: lines.map(([speaker, clean, text], id) => {
+    // Как в ядре: текст — как распознан, LLM его не переписывает.
+    utterances: lines.map(([speaker, , text], id) => {
       const start = at;
       at += 6 + text.length / 14;
-      return { id, speaker, start, end: at - 1, raw: text.toLowerCase(), text, clean };
+      return { id, speaker, start, end: at - 1, raw: text.toLowerCase(), text, clean: "" };
     }),
     protocol: withProtocol ? protocol : null,
   };
@@ -156,7 +157,7 @@ function live(e: LiveEvent) {
 
 /** Запись с микрофона: таймер и громкость, фразы раз в несколько секунд — пока не остановят. */
 let recorder: { id: string; stop: boolean; keep: boolean } | null = null;
-async function record(r: Recording) {
+async function record(r: Recording, meeting: boolean) {
   recorder = { id: r.id, stop: false, keep: true };
   await job(r.id, "record", "processing", "load", l("Загрузка моделей", "Loading models"));
   await sleep(1200);
@@ -167,7 +168,8 @@ async function record(r: Recording) {
     await sleep(200);
     seconds += 0.2;
     const peak = 0.05 + Math.random() * 0.5 * (Math.sin(seconds * 1.7) + 1);
-    await emit("record", { recording_id: r.id, seconds, peak });
+    const system = meeting ? 0.05 + Math.random() * 0.4 * (Math.cos(seconds * 1.3) + 1) : null;
+    await emit("record", { recording_id: r.id, seconds, peak, system });
     if (seconds > next * 5 + 3 && next < phrases.length) {
       await live({ recording_id: r.id, kind: "text", start: next * 5, text: phrases[next] });
       next++;
@@ -192,7 +194,7 @@ async function stage(id: string, kind: JobKind, code: string, title: string, ste
   }
 }
 
-/** Расшифровка: текст появляется по мере распознавания, затем черновик, затем редактура. */
+/** Расшифровка: текст появляется по мере распознавания, затем черновик. */
 async function transcribe(r: Recording) {
   await sleep(400);
   r.status = "processing";
@@ -205,12 +207,9 @@ async function transcribe(r: Recording) {
   );
   await stage(r.id, "transcribe", "diarize", l("Разделение по спикерам", "Separating speakers"), 5);
   r.duration = full.duration;
-  // Как в ядре: в окне — только отредактированный текст, по частям.
-  await stage(r.id, "transcribe", "polish", l("Редактура текста", "Polishing text"), 3, (i) => {
-    transcripts[r.id] = { ...full, utterances: full.utterances.slice(0, (i + 1) * 2) };
-    return live({ recording_id: r.id, kind: "draft" });
-  });
+  await stage(r.id, "transcribe", "terms", l("Исправление терминов", "Fixing terms"), 1);
   transcripts[r.id] = full;
+  await live({ recording_id: r.id, kind: "draft" });
   r.status = "done";
   await job(r.id, "transcribe", "done", "", "", 1);
 }
@@ -282,8 +281,8 @@ const commands: Record<string, (a: Args) => unknown> = {
   search: (a) =>
     recordings.flatMap((r) => {
       if (r.status !== "done") return [];
-      const hit = transcriptOf(r.id).utterances.find((u) => u.clean.toLowerCase().includes(a.query));
-      return hit ? [{ id: r.id, snippet: hit.clean.slice(0, 70) }] : [];
+      const hit = transcriptOf(r.id).utterances.find((u) => u.text.toLowerCase().includes(a.query));
+      return hit ? [{ id: r.id, snippet: hit.text.slice(0, 70) }] : [];
     }),
   stats: () => ({
     recordings: recordings.length, seconds: recordings.reduce((s, r) => s + r.duration, 0),
@@ -296,14 +295,15 @@ const commands: Record<string, (a: Args) => unknown> = {
     return transcriptOf(a.id);
   },
   live: () => (liveState ? [liveState] : []),
-  start_recording: () => {
+  start_recording: (a) => {
     if (recorder) throw l("запись уже идёт", "a recording is already in progress");
     const now = new Date();
     const stampNow = stamp(0, now.toTimeString().slice(0, 5));
-    const title = `${l("Запись", "Recording")} ${stampNow.slice(8, 10)}.${stampNow.slice(5, 7)}.${stampNow.slice(0, 4)} ${stampNow.slice(11)}`;
+    const meeting = a?.source === "meeting";
+    const title = `${meeting ? l("Встреча", "Meeting") : l("Запись", "Recording")} ${stampNow.slice(8, 10)}.${stampNow.slice(5, 7)}.${stampNow.slice(0, 4)} ${stampNow.slice(11)}`;
     const r = rec(`n${++seq}`, title, 0, 0, { status: "recording", created_at: stampNow, source: `/Users/demo/Library/recordings/n${seq}/capture.wav` });
     recordings = [r, ...recordings];
-    void record(recordings[0]);
+    void record(recordings[0], meeting);
     return r.id;
   },
   stop_recording: (a) => {
@@ -323,7 +323,7 @@ const commands: Record<string, (a: Args) => unknown> = {
   },
   make_protocol: (a) => void writeProtocol(recordings.find((r) => r.id === a.id)!),
   export_file: (a) => a.to ?? `/Users/demo/recordings/${a.id}/${a.doc}.${a.format}`,
-  export_text: (a) => `# ${transcriptOf(a.id).title}\n\n` + transcriptOf(a.id).utterances.map((u) => (a.verbatim ? u.text : u.clean)).join("\n\n"),
+  export_text: (a) => `# ${transcriptOf(a.id).title}\n\n` + transcriptOf(a.id).utterances.map((u) => (a.verbatim ? u.text : u.clean || u.text)).join("\n\n"),
   clipboard_text: () => "текст из буфера обмена",
   list_terms: () => terms,
   save_term: (a) => {

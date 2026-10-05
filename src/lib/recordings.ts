@@ -1,7 +1,7 @@
 /** Действия над записями и папками библиотеки — общие для бокового списка, заголовка записи и меню. */
 
 import { save } from "@tauri-apps/plugin-dialog";
-import { api, copyText, recordingDir, revealLabel, showError, type AsrModel, type DiarModel, type Folder, type Recording } from "./api";
+import { api, copyText, recordingDir, revealLabel, showError, type AsrModel, type DiarModel, type Folder, type Recording, type RecordSource } from "./api";
 import { t, tn } from "./i18n.svelte";
 import { live } from "./live.svelte";
 import { app } from "./state.svelte";
@@ -12,20 +12,22 @@ import { toast } from "./ui/toast.svelte";
 const ids = (rs: Recording[]) => rs.map((r) => r.id);
 const busy = (r: Recording) => r.status === "processing" || r.status === "queued" || r.status === "recording" || !!live.of(r.id);
 
-// ---------- запись с микрофона ----------
+// ---------- запись с микрофона и видеовстреч ----------
 
 /** Начинает запись и открывает её; если запись уже идёт — открывает идущую. */
-export async function startRecording() {
+export async function startRecording(source: RecordSource = "mic") {
   const current = live.recording;
   if (current) return app.open(current.recording_id);
   try {
-    const id = await api.startRecording();
+    const id = await api.startRecording(source);
     await app.refresh();
     app.open(id);
   } catch (e) {
     showError(e);
   }
 }
+
+export const startMeeting = () => startRecording("meeting");
 
 export const stopRecording = (r: Recording) => done(api.stopRecording(r.id, true));
 

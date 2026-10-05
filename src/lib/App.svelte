@@ -12,7 +12,7 @@
   import { t } from "./i18n.svelte";
   import { live } from "./live.svelte";
   import { models } from "./models.svelte";
-  import { newFolder, startRecording } from "./recordings";
+  import { newFolder, startMeeting, startRecording } from "./recordings";
   import Settings from "./settings/Settings.svelte";
   import { app } from "./state.svelte";
 
@@ -35,6 +35,7 @@
     const key = e.key.toLowerCase();
     if (key === ",") app.go("settings");
     else if (key === "o") addFiles();
+    else if (key === "r" && e.shiftKey) startMeeting();
     else if (key === "r") startRecording();
     else if (key === "n" && e.shiftKey) newFolder();
     else return;
@@ -53,6 +54,7 @@
       api.onMenu((action) => {
         if (action === "add") addFiles();
         else if (action === "record") startRecording();
+        else if (action === "meeting") startMeeting();
         else if (action === "folder") newFolder();
         else app.go("settings", action === "about" ? "about" : undefined);
       }),

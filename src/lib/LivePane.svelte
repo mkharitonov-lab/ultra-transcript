@@ -12,7 +12,7 @@
     { title: "live.prepare", stages: ["load", "prepare", "denoise"], on: true },
     { title: "live.recognize", stages: ["recognize"], on: true },
     { title: "live.speakers", stages: ["diarize", "identify"], on: app.settings?.diar_model !== "off" },
-    { title: "live.polish", stages: ["terms", "polish", "enrich"], on: app.settings?.llm_enabled ?? false },
+    { title: "live.terms", stages: ["terms", "enrich"], on: true },
     { title: "live.save", stages: ["condense", "protocol", "export"], on: true },
   ].filter((p) => p.on) as { title: Key; stages: string[]; on: boolean }[]);
   const at = $derived(Math.max(0, phases.findIndex((p) => p.stages.includes(job?.stage ?? ""))));

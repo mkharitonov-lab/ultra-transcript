@@ -3,9 +3,9 @@
   import { api, fmtTime, type Folder, type Recording } from "./api";
   import { fmtDate, i18n, locale, t, tn } from "./i18n.svelte";
   import { live } from "./live.svelte";
-  import { folderMenu, newFolder, recordingMenu, remove, startRecording } from "./recordings";
+  import { folderMenu, newFolder, recordingMenu, remove, startMeeting, startRecording } from "./recordings";
   import { app, type View } from "./state.svelte";
-  import { openMenu } from "./ui/menu.svelte";
+  import { openMenu, type MenuItem } from "./ui/menu.svelte";
 
   let { onadd }: { onadd: () => void } = $props();
   /** Запись с микрофона, которая идёт сейчас, — кнопка «Записать» ведёт к ней. */
@@ -136,6 +136,13 @@
     }
   }
 
+  const mac = navigator.platform.toLowerCase().includes("mac");
+  /** Что записать: микрофон или видеовстречу (микрофон и звук компьютера). */
+  const recordMenu: MenuItem[] = $derived([
+    { label: t("side.recordMic"), icon: "mic", hint: mac ? "⌘R" : "Ctrl+R", action: () => startRecording() },
+    { label: t("side.meeting"), icon: "video", hint: mac ? "⇧⌘R" : "Ctrl+Shift+R", action: startMeeting },
+  ]);
+
   const nav: { view: Exclude<View, "recording" | "home">; key: "nav.dictionary" | "nav.people" | "nav.settings"; icon: string }[] = [
     { view: "dictionary", key: "nav.dictionary", icon: "book" },
     { view: "people", key: "nav.people", icon: "people" },
@@ -179,10 +186,18 @@
   <div class="titlebar" data-tauri-drag-region></div>
   <div class="top">
     <div class="actions">
-      <button class="primary add" class:live={!!capturing} onclick={startRecording}>
-        {#if capturing}<span class="reddot"></span> {fmtTime(capturing.seconds)}{:else}<Icon name="mic" /> {t("side.record")}{/if}
-      </button>
-      <button class="add" onclick={onadd}><Icon name="plus" /> {t("side.add")}</button>
+      <div class="split">
+        <button class="primary add" class:live={!!capturing} onclick={() => startRecording()}>
+          {#if capturing}<span class="reddot"></span> {fmtTime(capturing.seconds)}{:else}<Icon name="mic" /> {t("side.record")}{/if}
+        </button>
+        {#if !capturing}
+          <button class="primary more" aria-label={t("side.recordMore")} title={t("side.recordMore")} onclick={(e) => openMenu(e, recordMenu)}>
+            <Icon name="chevron" size={12} />
+          </button>
+        {/if}
+      </div>
+      <!-- Без значка: рядом с кнопкой записи и её меню для «Добавить файлы» мало места. -->
+      <button class="add" onclick={onadd}>{t("side.add")}</button>
     </div>
     <label class="search">
       <Icon name="search" size={13} />
@@ -197,7 +212,8 @@
 
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <nav class="library" {onkeydown} oncontextmenu={(e) => openMenu(e, [
-    { label: t("side.record"), icon: "mic", action: startRecording },
+    { label: t("side.record"), icon: "mic", action: () => startRecording() },
+    { label: t("side.meeting"), icon: "video", action: startMeeting },
     { label: t("side.add"), icon: "plus", action: onadd },
     { label: t("folder.new"), icon: "folder-plus", action: () => newFolder() },
   ])}>
@@ -267,11 +283,14 @@
   .titlebar { height: 38px; flex-shrink: 0; }
   .top { padding: 0 12px 2px; display: flex; flex-direction: column; gap: 8px; }
   .home { margin: 0 -4px; width: auto; }
-  .actions { display: flex; gap: 6px; }
-  .add { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 8px; font-weight: 550; white-space: nowrap; }
+  .actions { display: flex; gap: 4px; }
+  .add { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 5px; padding: 6px 6px; font-weight: 550; white-space: nowrap; overflow: hidden; }
   .add :global(svg) { flex-shrink: 0; }
   /* Кнопка записи — по содержимому: длинной подписи «Добавить файлы» нужно больше места. */
   .add.primary { flex: 0 0 auto; }
+  .split { display: flex; }
+  .split:has(.more) .add { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .more { display: flex; align-items: center; padding: 6px 3px; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid color-mix(in srgb, var(--accent-fg) 25%, transparent); }
   .add.live { background: var(--danger); font-variant-numeric: tabular-nums; }
   .add.live .reddot { background: var(--accent-fg); }
   .reddot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); animation: pulse 1.4s ease-in-out infinite; }

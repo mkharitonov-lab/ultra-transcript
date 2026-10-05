@@ -46,8 +46,10 @@ pub struct LiveEvent {
 pub struct RecordEvent {
     pub recording_id: String,
     pub seconds: f32,
-    /// Пиковая громкость за последние доли секунды, 0…1.
+    /// Пиковая громкость микрофона за последние доли секунды, 0…1.
     pub peak: f32,
+    /// То же для звука компьютера; нет — его не пишут.
+    pub system: Option<f32>,
 }
 
 pub enum Signal {
@@ -376,9 +378,10 @@ impl Service {
         self.recorder.lock().unwrap().as_ref().map(|r| r.id.clone())
     }
 
-    /// Начинает запись с микрофона из настроек; возвращает идентификатор новой записи.
-    /// Микрофон открывается до возврата — если его нет, ошибка приходит сразу.
-    pub fn start_recording(self: &Arc<Self>) -> Result<String> {
+    /// Начинает запись с микрофона из настроек (для встречи — ещё и звука компьютера);
+    /// возвращает идентификатор новой записи. Устройства открываются до возврата — если
+    /// их нет, ошибка приходит сразу.
+    pub fn start_recording(self: &Arc<Self>, what: record::Source) -> Result<String> {
         let mut slot = self.recorder.lock().unwrap();
         if slot.is_some() {
             anyhow::bail!(tr("запись уже идёт", "a recording is already in progress"));
@@ -406,7 +409,7 @@ impl Service {
         let svc = self.clone();
         let (tid, tstop, tkeep, tsource) = (id.clone(), stop.clone(), keep.clone(), source.clone());
         let thread = std::thread::spawn(move || {
-            let capture = match Capture::open(&settings.input_device) {
+            let capture = match Capture::open(&settings.input_device, what) {
                 Ok(c) => {
                     let _ = ready_tx.send(Ok(c.device.clone()));
                     c
@@ -428,7 +431,14 @@ impl Service {
         }
         self.store.upsert_recording(&Recording {
             id: id.clone(),
-            title: format!("{} {}", tr("Запись", "Recording"), now.format("%d.%m.%Y %H:%M")),
+            title: format!(
+                "{} {}",
+                match what {
+                    record::Source::Mic => tr("Запись", "Recording"),
+                    record::Source::Meeting => tr("Встреча", "Meeting"),
+                },
+                now.format("%d.%m.%Y %H:%M")
+            ),
             source: source.to_string_lossy().into_owned(),
             created_at: now.format("%Y-%m-%d %H:%M").to_string(),
             duration: 0.0,
@@ -504,11 +514,11 @@ impl Service {
         }
     }
 
-    fn tick(&self, id: &str, seconds: f32, peak: f32) {
+    fn tick(&self, id: &str, seconds: f32, peak: f32, system: Option<f32>) {
         if let Some(l) = self.live.lock().unwrap().iter_mut().find(|l| l.recording_id == id) {
             l.seconds = seconds;
         }
-        (self.emit)(Signal::Record(RecordEvent { recording_id: id.into(), seconds, peak }));
+        (self.emit)(Signal::Record(RecordEvent { recording_id: id.into(), seconds, peak, system }));
     }
 
     /// Запись с микрофона расшифрована: исходный WAV (115 МБ в час) больше не нужен —
@@ -606,8 +616,8 @@ impl Listen for RecordListener<'_> {
         self.svc.show(self.id, Live::Text { start, text });
     }
 
-    fn tick(&self, seconds: f32, peak: f32) {
-        self.svc.tick(self.id, seconds, peak);
+    fn tick(&self, seconds: f32, peak: f32, system: Option<f32>) {
+        self.svc.tick(self.id, seconds, peak, system);
     }
 }
 

@@ -75,6 +75,8 @@ pub struct Settings {
     pub voice_threshold: f32,
     pub archive_kbps: u32,
     pub auto_accept_suggestions: bool,
+    /// Называть запись по содержанию (LLM), пока пользователь не переименовал её сам.
+    pub auto_title: bool,
     pub transcript_template: String,
     pub protocol_template: String,
     pub theme: Theme,
@@ -107,6 +109,7 @@ impl Default for Settings {
             voice_threshold: 0.55,
             archive_kbps: 24,
             auto_accept_suggestions: false,
+            auto_title: true,
             transcript_template: String::new(),
             protocol_template: String::new(),
             theme: Theme::default(),
@@ -280,6 +283,8 @@ const MIGRATIONS: &[&str] = &[
      ALTER TABLE recordings ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
      ALTER TABLE rules ADD COLUMN docx INTEGER NOT NULL DEFAULT 0;
      UPDATE rules SET docx = 1;",
+    // 3. Название, данное пользователем: LLM его больше не меняет.
+    "ALTER TABLE recordings ADD COLUMN renamed INTEGER NOT NULL DEFAULT 0;",
 ];
 
 fn migrate(db: &mut Connection) -> Result<()> {
@@ -419,7 +424,15 @@ impl Store {
                 self.db().execute("UPDATE recordings SET title=?2 WHERE id=?1", params![id, title])?;
             }
         }
+        self.db().execute("UPDATE recordings SET renamed=1 WHERE id=?1", [id])?;
         Ok(())
+    }
+
+    /// Переименовал ли запись пользователь: тогда название по содержанию ей не даётся.
+    pub fn is_renamed(&self, id: &str) -> bool {
+        self.db()
+            .query_row("SELECT renamed FROM recordings WHERE id=?1", [id], |r| r.get(0))
+            .unwrap_or(false)
     }
 
     pub fn set_archived(&self, ids: &[String], archived: bool) -> Result<()> {
@@ -1123,8 +1136,10 @@ mod tests {
     fn rename_changes_library_and_transcript() {
         let s = memory();
         s.upsert_recording(&recording("r1", "запись-001")).unwrap();
+        assert!(!s.is_renamed("r1"));
         // Расшифровки ещё нет — меняется только библиотека.
         s.rename_recording("r1", " Планёрка ").unwrap();
+        assert!(s.is_renamed("r1"), "своё название LLM не трогает");
         assert_eq!(s.recording("r1").unwrap().title, "Планёрка");
         s.save_transcript(&Transcript { id: "r1".into(), title: "Планёрка".into(), duration: 60.0, ..Default::default() }).unwrap();
         s.rename_recording("r1", "Совет директоров").unwrap();

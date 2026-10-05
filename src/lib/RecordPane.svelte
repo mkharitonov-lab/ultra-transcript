@@ -6,10 +6,12 @@
   import { app } from "./state.svelte";
   import { confirm } from "./ui/dialog.svelte";
 
-  /** Запись с микрофона: таймер, громкость, кнопка остановки и текст по мере распознавания. */
+  /** Запись с микрофона или видеовстречи: таймер, громкость, кнопка остановки и текст по мере распознавания. */
   let { recording, job }: { recording: Recording; job?: LiveState } = $props();
 
   const peak = $derived(live.peak(recording.id));
+  /** Громкость звука компьютера; есть только у записи встречи. */
+  const system = $derived(live.system(recording.id));
   const seconds = $derived(job?.seconds ?? 0);
   /** Модели ещё грузятся: звук пока не пишется. */
   const starting = $derived(!job || job.stage !== "record");
@@ -19,6 +21,13 @@
     if (peak > loudest) loudest = peak;
   });
   const silent = $derived(!starting && seconds > 6 && loudest < 0.004);
+  let loudestSystem = $state(0);
+  $effect(() => {
+    if (system !== undefined && system > loudestSystem) loudestSystem = system;
+  });
+  /** Тишина в звуке компьютера — обычное дело, пока собеседники молчат; подсказка — не сразу. */
+  const systemSilent = $derived(!starting && system !== undefined && seconds > 20 && loudestSystem < 0.0005);
+  const level = (p: number) => Math.min(100, Math.round(Math.sqrt(p) * 100));
 
   let stopping = $state(false);
   async function stop() {
@@ -47,9 +56,18 @@
     <div class="status">
       <span class="dot" class:idle={starting}></span>
       <span class="timer">{fmtTime(seconds)}</span>
-      <span class="label muted">{starting ? job?.title || t("live.starting") : t("record.listening")}</span>
+      <span class="label muted">{starting ? job?.title || t("live.starting") : t(system !== undefined ? "record.meeting" : "record.listening")}</span>
     </div>
-    <div class="meter" aria-hidden="true"><span style="width:{Math.min(100, Math.round(Math.sqrt(peak) * 100))}%"></span></div>
+    {#if system !== undefined}
+      <div class="meters" aria-hidden="true">
+        <span class="faint"><Icon name="mic" size={12} /> {t("record.mic")}</span>
+        <div class="meter"><span style="width:{level(peak)}%"></span></div>
+        <span class="faint"><Icon name="video" size={12} /> {t("record.system")}</span>
+        <div class="meter"><span style="width:{level(system)}%"></span></div>
+      </div>
+    {:else}
+      <div class="meter" aria-hidden="true"><span style="width:{level(peak)}%"></span></div>
+    {/if}
     <div class="buttons">
       <button class="primary stop" onclick={stop} disabled={stopping}>
         {#if stopping}<span class="spinner"></span>{:else}<Icon name="stop" size={13} />{/if}
@@ -61,6 +79,9 @@
 
   {#if silent}
     <div class="warn"><Icon name="alert" /> <span>{t("record.silent")}</span></div>
+  {/if}
+  {#if systemSilent}
+    <div class="warn"><Icon name="alert" /> <span>{t("record.systemSilent")}</span></div>
   {/if}
 
   <div class="text" bind:this={box} onscroll={() => box && (pinned = box.scrollHeight - box.scrollTop - box.clientHeight < 40)}>
@@ -83,6 +104,8 @@
   .timer { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
   .label { font-size: var(--fs-sm); }
   .meter { height: 5px; border-radius: 3px; background: var(--bg-active); overflow: hidden; max-width: 520px; }
+  .meters { display: grid; grid-template-columns: max-content minmax(0, 440px); justify-content: start; align-items: center; gap: 6px 10px; font-size: var(--fs-xs); }
+  .meters > span { display: inline-flex; align-items: center; gap: 5px; }
   .meter span { display: block; height: 100%; border-radius: 3px; background: var(--ok); transition: width 0.12s linear; }
   .buttons { display: flex; align-items: center; gap: 8px; }
   .stop { display: inline-flex; align-items: center; gap: 7px; padding: 6px 16px; font-weight: 550; }

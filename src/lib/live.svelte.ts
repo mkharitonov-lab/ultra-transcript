@@ -8,11 +8,15 @@ import { api, type JobEvent, type LiveEvent, type LiveState, type RecordEvent } 
 let jobs = $state<Record<string, LiveState>>({});
 /** Громкость микрофона (0…1) по записям, которые идут сейчас. */
 let peaks = $state<Record<string, number>>({});
+/** Громкость звука компьютера — только у записи встречи. */
+let systems = $state<Record<string, number>>({});
 
 export const live = {
   /** Что сейчас происходит с записью; `undefined` — она не в работе. */
   of: (id: string): LiveState | undefined => jobs[id],
   peak: (id: string): number => peaks[id] ?? 0,
+  /** Громкость звука компьютера; `undefined` — его не пишут. */
+  system: (id: string): number | undefined => systems[id],
   /** Запись с микрофона, которая идёт сейчас. */
   get recording(): LiveState | undefined {
     return Object.values(jobs).find((j) => j.job === "record");
@@ -28,6 +32,7 @@ export const live = {
     const cur = jobs[e.recording_id];
     if (cur) cur.seconds = e.seconds;
     peaks[e.recording_id] = e.peak;
+    if (e.system != null) systems[e.recording_id] = e.system;
   },
 
   /** Возвращает `true`, когда задача началась или закончилась — пора обновить библиотеку. */
@@ -35,6 +40,7 @@ export const live = {
     if (e.status !== "processing") {
       delete jobs[e.recording_id];
       delete peaks[e.recording_id];
+      delete systems[e.recording_id];
       return true;
     }
     const cur = jobs[e.recording_id];

@@ -4,7 +4,7 @@
   import { api, type Stats } from "./api";
   import { fmtDuration, fmtSize, t, tn, type Key } from "./i18n.svelte";
   import { models, ready, starter } from "./models.svelte";
-  import { startRecording } from "./recordings";
+  import { startMeeting, startRecording } from "./recordings";
   import { app, type SettingsSection } from "./state.svelte";
   import Progress from "./ui/Progress.svelte";
 
@@ -45,12 +45,13 @@
     { keys: ["Space"], text: "keys.play" },
     { keys: ["⌘", "K"], text: "keys.search" },
     { keys: ["⌘", "R"], text: "keys.record" },
+    { keys: ["⇧", "⌘", "R"], text: "keys.meeting" },
     { keys: ["⌘", "O"], text: "keys.add" },
     { keys: ["⌘", ","], text: "keys.settings" },
     { keys: ["↑", "↓"], text: "keys.list" },
   ];
   const mac = navigator.platform.toLowerCase().includes("mac");
-  const key = (k: string) => (k === "Space" ? t("keys.space") : k === "⌘" && !mac ? "Ctrl" : k);
+  const key = (k: string) => (k === "Space" ? t("keys.space") : k === "⌘" && !mac ? "Ctrl" : k === "⇧" && !mac ? "Shift" : k);
 </script>
 
 <div class="welcome">
@@ -83,10 +84,15 @@
       </section>
     {:else}
       <div class="start">
-        <button class="card record" onclick={startRecording}>
+        <button class="card record" onclick={() => startRecording()}>
           <span class="ico"><Icon name="mic" size={22} /></span>
           <span class="big-text">{t("welcome.record")}</span>
           <span class="muted">{t("welcome.recordHint")}</span>
+        </button>
+        <button class="card record" onclick={startMeeting}>
+          <span class="ico"><Icon name="video" size={22} /></span>
+          <span class="big-text">{t("welcome.meeting")}</span>
+          <span class="muted">{t("welcome.meetingHint")}</span>
         </button>
         <button class="card drop" onclick={onadd}>
           <span class="ico plain"><Icon name="wave" size={22} /></span>
@@ -158,7 +164,7 @@
   .models li.ok :global(svg) { color: var(--ok); }
   .small { font-size: var(--fs-sm); }
 
-  .start { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .start { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
   .card {
     display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 26px 20px; white-space: normal;
     border-radius: var(--r-xl); color: var(--fg-muted); transition: border-color 0.15s, background 0.15s, color 0.15s;

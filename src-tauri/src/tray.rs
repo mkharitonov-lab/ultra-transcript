@@ -27,13 +27,14 @@ pub fn app_name() -> &'static str {
 fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let open = format!("{} {}", tr("Открыть", "Open"), app_name());
     let show = MenuItem::with_id(app, "show", open, true, None::<&str>)?;
-    let record = if RECORDING.load(Ordering::Relaxed) {
-        MenuItem::with_id(app, "stop", tr("Остановить запись", "Stop Recording"), true, None::<&str>)?
-    } else {
-        MenuItem::with_id(app, "record", tr("Записать…", "Record…"), true, None::<&str>)?
-    };
     let quit = MenuItem::with_id(app, "quit", tr("Выйти", "Quit"), true, None::<&str>)?;
-    Menu::with_items(app, &[&show, &record, &quit])
+    if RECORDING.load(Ordering::Relaxed) {
+        let stop = MenuItem::with_id(app, "stop", tr("Остановить запись", "Stop Recording"), true, None::<&str>)?;
+        return Menu::with_items(app, &[&show, &stop, &quit]);
+    }
+    let record = MenuItem::with_id(app, "record", tr("Записать с микрофона…", "Record from Microphone…"), true, None::<&str>)?;
+    let meeting = MenuItem::with_id(app, "meeting", tr("Записать видеовстречу…", "Record Video Call…"), true, None::<&str>)?;
+    Menu::with_items(app, &[&show, &record, &meeting, &quit])
 }
 
 /// Запись началась или кончилась — в меню значка другой пункт.
@@ -64,9 +65,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu(app)?)
         .on_menu_event(|app, ev| match ev.id.as_ref() {
             "show" => show_window(app),
-            "record" => {
+            id @ ("record" | "meeting") => {
                 show_window(app);
-                let _ = app.emit("menu", "record");
+                let _ = app.emit("menu", id);
             }
             "stop" => {
                 if let Some(svc) = app.try_state::<Arc<Service>>() {

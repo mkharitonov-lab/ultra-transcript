@@ -18,6 +18,8 @@ pub mod record;
 pub mod service;
 pub mod speech;
 pub mod store;
+#[cfg(target_os = "macos")]
+mod systap;
 pub mod transcript;
 mod tray;
 pub mod voices;
@@ -196,11 +198,12 @@ fn live(svc: Svc) -> Vec<service::LiveState> {
 
 // ---------- запись с микрофона ----------
 
-/// Начинает запись; микрофон открывается до ответа, так что без него — ошибка сразу.
+/// Начинает запись; устройства открываются до ответа, так что без них — ошибка сразу.
+/// `source` — только микрофон или встреча (микрофон и звук компьютера).
 #[tauri::command]
-async fn start_recording(svc: Svc<'_>) -> R<String> {
+async fn start_recording(svc: Svc<'_>, source: Option<record::Source>) -> R<String> {
     let svc = svc.inner().clone();
-    blocking(move || svc.start_recording()).await
+    blocking(move || svc.start_recording(source.unwrap_or_default())).await
 }
 
 /// Останавливает запись: `keep` — сохранить и расшифровать, иначе удалить.
