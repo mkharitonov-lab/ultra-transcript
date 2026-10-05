@@ -147,7 +147,7 @@ fn main() -> anyhow::Result<()> {
     }
     let t = store.load_transcript(&id)?;
     for s in &t.speakers {
-        println!("# {} = {} {:?}", s.id, s.name, s.similarity);
+        println!("# {} = {} {:?} {:?}", s.id, s.name, s.suggested, s.similarity);
     }
     for u in &t.utterances {
         println!("[{}] {}: {}", ultra_transcript_lib::transcript::fmt_time(u.start), t.speaker_name(&u.speaker), u.text);

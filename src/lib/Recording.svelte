@@ -4,6 +4,7 @@
   import LivePane from "./LivePane.svelte";
   import ProtocolView from "./ProtocolView.svelte";
   import RecordPane from "./RecordPane.svelte";
+  import VoiceCheck from "./VoiceCheck.svelte";
   import { api, audioUrl, copyText, fmtTime, showError, speakerColor, type Person, type Recording, type Speaker, type Transcript, type Utterance } from "./api";
   import { fmtDate, t, tn } from "./i18n.svelte";
   import { live, parsePartialJson } from "./live.svelte";
@@ -22,6 +23,8 @@
   let tab = $state<"transcript" | "protocol">("transcript");
   let people = $state<Person[]>([]);
   let picking = $state<string | null>(null);
+  /** Открытая проверка голоса спикера на слух (см. `VoiceCheck`). */
+  let checking = $state<{ speaker: string; name: string; answer: (remember: boolean | null) => void } | null>(null);
   let query = $state("");
   let audio = $state<HTMLAudioElement>();
   let time = $state(0);
@@ -42,6 +45,8 @@
   const writing = $derived(job?.job === "protocol");
   const draftProtocol = $derived(writing && job?.protocol ? (parsePartialJson(job.protocol) as Record<string, unknown> | null) : null);
   const active = $derived(tr ? tr.utterances.findLastIndex((u) => u.start <= time + 0.05) : -1);
+  /** На кого похож голос спикера (в старых расшифровках имя ставилось сразу — тогда это он сам). */
+  const guessOf = (s: Speaker) => people.find((p) => p.id === (s.suggested ?? (s.similarity ? s.person_id : null))) ?? null;
   const filtered = $derived(people.filter((p) => !query || p.name.toLowerCase().includes(query.toLowerCase())));
   const kind = $derived(tab === "protocol" && tr?.protocol ? "protocol" : "transcript");
 
@@ -124,14 +129,24 @@
     }
   }
 
+  /** Назвать спикера. Голос пойдёт в профиль человека, только если пользователь прослушал
+   *  фрагменты и подтвердил, что там говорит только этот человек. */
   async function assign(speaker: string, personId: number | null, name = "") {
     picking = null;
     query = "";
+    const who = people.find((p) => p.id === personId)?.name ?? name.trim();
+    let remember = false;
+    if (who) {
+      const answer = await new Promise<boolean | null>((resolve) => (checking = { speaker, name: who, answer: resolve }));
+      checking = null;
+      if (answer === null) return;
+      remember = answer;
+    }
     try {
-      tr = await api.assignSpeaker(recording.id, speaker, personId, name);
+      tr = await api.assignSpeaker(recording.id, speaker, personId, name, remember);
       people = await api.people();
       app.refresh();
-      if (personId !== null || name.trim()) toast(t("rec.voiceSaved"), "ok");
+      if (remember) toast(t("rec.voiceSaved"), "ok");
     } catch (e) {
       showError(e);
     }
@@ -218,12 +233,17 @@
     {#if tr && tab === "transcript" && !streaming}
       <div class="speakers">
         {#each tr.speakers as s (s.id)}
+          {@const guess = guessOf(s)}
           <div class="chip-wrap">
             <button class="chip" onclick={() => openPicker(s.id)} oncontextmenu={(e) => openMenu(e, speakerMenu(s))} disabled={busy}>
               <span class="dot" style="background:{speakerColor(s.id)}"></span>
               {s.name}
-              {#if s.similarity}<span class="sim" title={t("rec.byVoice")}>{Math.round(s.similarity * 100)}%</span>{/if}
-              {#if !s.person_id}<span class="faint">· {t("rec.whoIsIt")}</span>{/if}
+              {#if guess && s.suggested}
+                <span class="faint">· {t("rec.looksLike", { name: guess.name })}</span>
+                {#if s.similarity}<span class="sim" title={t("rec.byVoice")}>{Math.round(s.similarity * 100)}%</span>{/if}
+              {:else if guess}
+                {#if s.similarity}<span class="sim" title={t("rec.byVoice")}>{Math.round(s.similarity * 100)}%</span>{/if}<span class="faint">· {t("rec.checkVoice")}</span>
+              {:else if !s.person_id}<span class="faint">· {t("rec.whoIsIt")}</span>{/if}
             </button>
             {#if picking === s.id}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -231,6 +251,9 @@
               <div class="picker">
                 <input type="text" placeholder={t("rec.pickerPlaceholder")} bind:value={query} onkeydown={(e) => pickerKey(e, s)} spellcheck="false" />
                 <div class="options">
+                  {#if guess && !query}
+                    <button onclick={() => assign(s.id, guess.id)}><Icon name="check" size={12} /> <span class="grow">{t("rec.confirmGuess", { name: guess.name })}</span></button>
+                  {/if}
                   {#each filtered.slice(0, 8) as p (p.id)}
                     <button onclick={() => assign(s.id, p.id)}>
                       <span class="grow">{p.name}</span>
@@ -308,6 +331,9 @@
         <div class="state"><h2>{t("rec.noSpeech")}</h2><p class="muted">{t("rec.noSpeechHint")}</p></div>
       {/each}
     </div>
+    {#if checking}
+      <VoiceCheck transcript={tr} speaker={checking.speaker} name={checking.name} src={audioUrl(app.info!.data_dir, recording.id)} onanswer={checking.answer} />
+    {/if}
   {:else if writing}
     <div class="protocol">
       {#if draftProtocol && Object.keys(draftProtocol).length}

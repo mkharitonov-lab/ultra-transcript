@@ -14,7 +14,8 @@ export type Recording = {
   has_protocol: boolean;
 };
 export type Folder = { id: number; name: string };
-export type Speaker = { id: string; name: string; person_id: number | null; similarity: number | null };
+/** `suggested` — на кого похож голос: только подсказка, имя ставит пользователь, проверив на слух. */
+export type Speaker = { id: string; name: string; person_id: number | null; similarity: number | null; suggested?: number | null };
 export type Utterance = { id: number; speaker: string; start: number; end: number; raw: string; text: string; clean: string };
 export type AsrModel = "gigaam" | "whisper-turbo" | "parakeet" | "glm-asr" | "whisper-large" | "t-one";
 /** Движок диаризации: без разделения, pyannote 3.0, pyannote community-1, NVIDIA Nemotron 3. */
@@ -123,8 +124,9 @@ export const api = {
   stopRecording: (id: string, keep = true) => invoke<void>("stop_recording", { id, keep }),
   inputDevices: () => invoke<string[]>("input_devices"),
   saveTranscript: (transcript: Transcript) => invoke<void>("save_transcript", { transcript }),
-  assignSpeaker: (id: string, speaker: string, personId: number | null, name: string) =>
-    invoke<Transcript>("assign_speaker", { id, speaker, personId, name }),
+  /** `remember` — пользователь проверил на слух, что у спикера только голос этого человека: голос идёт в профиль. */
+  assignSpeaker: (id: string, speaker: string, personId: number | null, name: string, remember: boolean) =>
+    invoke<Transcript>("assign_speaker", { id, speaker, personId, name, remember }),
   makeProtocol: (id: string) => invoke<void>("make_protocol", { id }),
   /** Собирает документ и возвращает путь к файлу; без `to` файл остаётся в папке записи. */
   exportFile: (id: string, doc: Doc, format: Format, to: string | null, verbatim = false) =>

@@ -33,9 +33,13 @@ pub struct Speaker {
     pub name: String,
     #[serde(default)]
     pub person_id: Option<i64>,
-    /// Сходство с голосовым профилем, если спикер опознан автоматически.
+    /// Сходство с голосовым профилем `suggested` (или, в старых расшифровках, `person_id`).
     #[serde(default)]
     pub similarity: Option<f32>,
+    /// На кого похож голос. Только подсказка: имя в расшифровку не ставится, пока
+    /// пользователь не проверит голос на слух и не подтвердит.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

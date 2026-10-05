@@ -3,6 +3,7 @@
   import { api, showError } from "../api";
   import { t } from "../i18n.svelte";
   import { app } from "../state.svelte";
+  import { updater } from "../updater.svelte";
   import Group from "../ui/Group.svelte";
   import Row from "../ui/Row.svelte";
 
@@ -23,6 +24,21 @@
     <p class="version">{t("about.version", { version: app.info?.version ?? "" })}</p>
   </div>
 </header>
+
+<Group>
+  <Row label={t("update.check")} hint={
+    updater.status === "checking" ? t("update.checking")
+    : updater.status === "latest" ? t("update.latest")
+    : updater.status === "error" ? t("update.checkFailed")
+    : updater.update ? t("update.title", { version: updater.update.version })
+    : t("update.checkHint")}>
+    {#if updater.update && updater.status !== "checking"}
+      <button class="primary" onclick={() => { updater.dismissed = false; }} disabled={updater.status === "downloading"}>{t("update.show")}</button>
+    {:else}
+      <button onclick={() => updater.check()} disabled={updater.status === "checking"}>{t("update.checkNow")}</button>
+    {/if}
+  </Row>
+</Group>
 
 <Group title={t("about.license")}>
   <Row label="PolyForm Noncommercial 1.0.0" hint={t("about.licenseHint")}>

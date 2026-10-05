@@ -18,13 +18,21 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
+          # Описание релиза: раздел версии из CHANGELOG.md и как установить.
+          { awk -v v="${TAG#v}" '/^## /{p=($2==v); next} p' CHANGELOG.md | sed '/^$/d'
+            echo
+            echo "Mac (Apple Silicon, macOS 14.2+) — файл .dmg, Windows 10/11 x64 — файл -setup.exe."
+            echo "Приложение не подписано сертификатами Apple и Microsoft: как открыть его в первый раз — в README, «Первый запуск»."
+            echo "Уже установленное приложение обновится само."
+          } > notes.md
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 ||
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
-              --title "Ультра Транскрибатор $TAG" --notes "Установка и первый запуск — в README."
+              --title "Ультра Транскрибатор $TAG" --notes-file notes.md
 
   build:
     needs: release
@@ -135,17 +143,31 @@ jobs:
           fi
           ls src-tauri/target/nemo-speech/lib src-tauri/target/nemo-speech/bin 2>/dev/null || true
 
+      # Список изменений для предложения обновиться (notes в latest.json) — раздел версии из CHANGELOG.md.
+      - id: notes
+        shell: bash
+        run: |
+          v=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          { echo 'text<<CHANGELOG_EOF'
+            awk -v v="$v" '/^## /{p=($2==v); next} p' CHANGELOG.md | sed '/^$/d'
+            echo CHANGELOG_EOF
+          } >> "$GITHUB_OUTPUT"
+
       - uses: tauri-apps/tauri-action@action-v1.0.0
         id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Подпись обновлений: открытая часть ключа — в tauri.conf.json (plugins.updater.pubkey).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: >-
             --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+            --config src-tauri/tauri.release.conf.json
             ${{ steps.nemo.outcome == 'success' && format('--config {0}', matrix.nemo_config) || '' }}
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: "Ультра Транскрибатор ${{ github.ref_name }}"
-          releaseBody: "Установка и первый запуск — в README."
+          releaseBody: ${{ steps.notes.outputs.text }}
           releaseDraft: true
           # GitHub выбрасывает из имён файлов кириллицу («Ультра Транскрибатор» → «_0.2.0_aarch64.dmg»).
           releaseAssetNamePattern: "UltraTranscript_[version]_[arch][setup][ext]"

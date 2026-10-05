@@ -226,9 +226,11 @@ fn save_transcript(svc: Svc, transcript: Transcript) -> R<()> {
     Ok(())
 }
 
-/// Назначает спикеру человека из справочника (или создаёт нового) и обучает голосовой профиль.
+/// Назначает спикеру человека из справочника (или создаёт нового). Голос спикера идёт в профиль
+/// человека, только если `remember`: пользователь прослушал фрагменты и подтвердил, что там
+/// говорит только этот человек. Иначе голос от профиля отвязывается.
 #[tauri::command]
-fn assign_speaker(svc: Svc, id: String, speaker: String, person_id: Option<i64>, name: String) -> R<Transcript> {
+fn assign_speaker(svc: Svc, id: String, speaker: String, person_id: Option<i64>, name: String, remember: bool) -> R<Transcript> {
     let store = &svc.store;
     let pid = match person_id {
         Some(pid) => Some(pid),
@@ -246,6 +248,7 @@ fn assign_speaker(svc: Svc, id: String, speaker: String, person_id: Option<i64>,
     for s in t.speakers.iter_mut().filter(|s| s.id == speaker) {
         s.person_id = pid;
         s.similarity = None;
+        s.suggested = None;
         s.name = pid
             .and_then(|pid| people.iter().find(|p| p.id == Some(pid)).map(|p| p.name.clone()))
             .unwrap_or_else(|| match (name.trim(), s.id.trim_start_matches('S').parse()) {
@@ -254,7 +257,7 @@ fn assign_speaker(svc: Svc, id: String, speaker: String, person_id: Option<i64>,
                 (name, _) => name.into(),
             });
     }
-    store.bind_voice(&id, &speaker, pid).map_err(e)?;
+    store.bind_voice(&id, &speaker, pid.filter(|_| remember)).map_err(e)?;
     store.save_transcript(&t).map_err(e)?;
     svc.enqueue(Job::Export { id });
     Ok(t)
@@ -477,6 +480,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let store = Arc::new(Store::open()?);
             let settings = store.settings();

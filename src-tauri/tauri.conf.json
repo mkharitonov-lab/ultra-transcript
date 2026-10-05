@@ -37,7 +37,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/ffmpeg"],
+    "externalBin": [
+      "binaries/ffmpeg"
+    ],
     "macOS": {
       "minimumSystemVersion": "14.2",
       "signingIdentity": "-",
@@ -50,5 +52,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYzQUY5RjBDMkI0NkM4ODIKUldTQ3lFWXJESit2WThXcEhVWVMzZXJzbWpzbU9CQitOVUVTbVZ4SnRsN0ZBT2l2MmhXTzg0VWgK",
+      "endpoints": [
+        "https://github.com/mkharitonov-lab/ultra-transcript/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

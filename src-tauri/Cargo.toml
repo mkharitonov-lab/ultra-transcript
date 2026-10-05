@@ -67,6 +67,9 @@ kodama = "0.3"
 libloading = "0.9"
 # Запись с микрофона: CoreAudio на Mac, WASAPI на Windows.
 cpal = "0.18"
+# Обновления из GitHub Releases (latest.json, подпись своим ключом) и перезапуск после установки.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

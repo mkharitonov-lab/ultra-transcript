@@ -15,6 +15,8 @@
   import { newFolder, startMeeting, startRecording } from "./recordings";
   import Settings from "./settings/Settings.svelte";
   import { app } from "./state.svelte";
+  import UpdatePrompt from "./UpdatePrompt.svelte";
+  import { updater } from "./updater.svelte";
 
   let dragging = $state(false);
 
@@ -44,6 +46,8 @@
 
   onMount(() => {
     app.init().then(() => live.restore(), showError);
+    // Обновления — тихо, через несколько секунд после запуска: не мешать открытию окна.
+    const updates = setTimeout(() => updater.check(true), 5000);
     const subs = [
       api.onJob((e) => {
         if (live.onJob(e)) app.refresh();
@@ -67,7 +71,10 @@
         }
       }),
     ];
-    return () => subs.forEach((s) => s.then((un) => un()));
+    return () => {
+      clearTimeout(updates);
+      subs.forEach((s) => s.then((un) => un()));
+    };
   });
 </script>
 
@@ -86,6 +93,8 @@
       {:else}<Welcome onadd={addFiles} />{/if}
     {/if}
   </main>
+
+  <UpdatePrompt />
 
   {#if dragging}
     <div class="drop-overlay"><div><Icon name="download" size={36} /><p>{t("drop.release")}</p></div></div>

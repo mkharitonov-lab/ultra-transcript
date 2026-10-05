@@ -290,16 +290,20 @@ fn identify(
 
     for (i, (label, emb)) in embeddings.iter().enumerate() {
         let hit = matched.get(label).copied();
-        let person = hit.and_then(|(pid, _)| people.iter().find(|p| p.id == Some(pid)));
+        let suggested = hit.and_then(|(pid, _)| people.iter().find(|p| p.id == Some(pid))).and_then(|p| p.id);
         if let Some(emb) = emb {
-            // Опознанный голос пополняет профиль человека; неопознанный ждёт подтверждения.
-            store.save_voice(&t.id, label, person.and_then(|p| p.id), emb)?;
+            // В профиль человека голос попадает только после проверки пользователем
+            // (`assign_speaker` с `remember`): кластер мог склеить несколько голосов,
+            // а неверный образец потом путает опознание во всех следующих записях.
+            store.save_voice(&t.id, label, None, emb)?;
         }
         t.speakers.push(Speaker {
             id: label.clone(),
-            name: person.map(|p| p.name.clone()).unwrap_or_else(|| speaker_label(i + 1, t.is_russian())),
-            person_id: person.and_then(|p| p.id),
-            similarity: hit.map(|(_, s)| s),
+            // Похожий голос — только подсказка: имя ставит пользователь, проверив на слух.
+            name: speaker_label(i + 1, t.is_russian()),
+            person_id: None,
+            similarity: suggested.and(hit.map(|(_, s)| s)),
+            suggested,
         });
     }
     Ok(())

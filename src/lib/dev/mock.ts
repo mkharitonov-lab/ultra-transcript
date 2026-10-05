@@ -107,7 +107,7 @@ function transcript(r: Recording, withProtocol = r.has_protocol): Transcript {
     id: r.id, title: r.title, source: r.source, created_at: r.created_at, duration: r.duration || 95,
     asr_model: "GigaAM v3", diar_model: "pyannote 3.0", language: "ru",
     speakers: [
-      { id: "S1", name: "Петров Сергей Иванович", person_id: 1, similarity: 0.82 },
+      { id: "S1", name: "Спикер 1", person_id: null, similarity: 0.82, suggested: 1 },
       { id: "S2", name: "Спикер 2", person_id: null, similarity: null },
       { id: "S3", name: "Смирнова Анна", person_id: 2, similarity: null },
     ],
@@ -320,8 +320,9 @@ const commands: Record<string, (a: Args) => unknown> = {
     const t = transcriptOf(a.id);
     const s = t.speakers.find((x) => x.id === a.speaker)!;
     const p = people.find((x) => x.id === a.personId);
-    Object.assign(s, { person_id: p?.id ?? (a.name ? ++seq : null), name: p?.name ?? (a.name || `Спикер ${a.speaker.slice(1)}`), similarity: null });
-    if (!p && a.name) people.push({ id: seq, name: a.name, aliases: "", role: "", org: "", voiceprints: 1, pending: false });
+    Object.assign(s, { person_id: p?.id ?? (a.name ? ++seq : null), name: p?.name ?? (a.name || `Спикер ${a.speaker.slice(1)}`), similarity: null, suggested: null });
+    if (!p && a.name) people.push({ id: seq, name: a.name, aliases: "", role: "", org: "", voiceprints: a.remember ? 1 : 0, pending: false });
+    else if (p && a.remember) p.voiceprints += 1;
     return t;
   },
   make_protocol: (a) => void writeProtocol(recordings.find((r) => r.id === a.id)!),
