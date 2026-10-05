@@ -12,7 +12,24 @@ permissions:
   contents: write
 
 jobs:
+  # Черновик релиза создаётся заранее: tauri-action v1 сам создать его не может
+  # («Resource not accessible by integration»), а загрузить файлы в готовый — может.
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+              --title "Ультра Транскрибатор $TAG" --notes "Установка и первый запуск — в README."
+
   build:
+    needs: release
+    # По тегу — после черновика релиза; вручную — без него.
+    if: ${{ !cancelled() && needs.release.result != 'failure' }}
     strategy:
       fail-fast: false
       matrix:
@@ -74,6 +91,16 @@ jobs:
           install_runtime: false
           cache: true
           stripdown: true
+
+      # llama.cpp на Windows — через Ninja в окружении MSVC: генератор Visual Studio 2026
+      # не передаёт компилятор вложенной сборке шейдеров Vulkan (No CMAKE_C_COMPILER).
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+      - if: runner.os == 'Windows'
+        uses: seanmiddleditch/gha-setup-ninja@v6
+      - if: runner.os == 'Windows'
+        shell: bash
+        run: echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
 
       - uses: tauri-apps/tauri-action@action-v1.0.0
         id: tauri
