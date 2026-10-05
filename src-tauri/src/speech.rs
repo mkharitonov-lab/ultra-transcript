@@ -21,6 +21,11 @@ pub enum AsrModel {
     Parakeet,
     /// GLM-ASR-Nano (Zhipu AI): распознавание языковой моделью в llama.cpp, 17 языков.
     GlmAsr,
+    /// Whisper large-v3 (OpenAI): полная, точнее turbo и в несколько раз медленнее.
+    WhisperLarge,
+    /// T-one (Т-Банк): потоковая модель для русского, обучена на телефонных разговорах.
+    #[serde(rename = "t-one")]
+    Tone,
 }
 
 impl AsrModel {
@@ -30,6 +35,8 @@ impl AsrModel {
             Self::WhisperTurbo => "sherpa-onnx-whisper-turbo",
             Self::Parakeet => "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
             Self::GlmAsr => "glm-asr-nano-2512",
+            Self::WhisperLarge => "sherpa-onnx-whisper-large-v3",
+            Self::Tone => "sherpa-onnx-streaming-t-one-russian-2025-09-08",
         }
     }
 
@@ -39,6 +46,8 @@ impl AsrModel {
             Self::WhisperTurbo => "Whisper large-v3-turbo",
             Self::Parakeet => "Parakeet TDT 0.6B v3",
             Self::GlmAsr => "GLM-ASR-Nano",
+            Self::WhisperLarge => "Whisper large-v3",
+            Self::Tone => "T-one",
         }
     }
 
@@ -49,7 +58,7 @@ impl AsrModel {
     pub fn language(self, language: &str) -> String {
         let language = language.trim().to_lowercase();
         match self {
-            Self::Gigaam => "ru".into(),
+            Self::Gigaam | Self::Tone => "ru".into(),
             _ if language == "auto" => String::new(),
             Self::Parakeet if !PARAKEET_LANGUAGES.contains(&language.as_str()) => String::new(),
             Self::GlmAsr if !crate::glm_asr::LANGUAGES.iter().any(|(c, _)| *c == language) => String::new(),
@@ -80,10 +89,11 @@ impl AsrModel {
                 rc.model_config.tokens = p(dir.join("tokens.txt"));
                 rc.model_config.model_type = Some("nemo_transducer".into());
             }
-            Self::WhisperTurbo => {
+            Self::WhisperTurbo | Self::WhisperLarge => {
+                let name = if self == Self::WhisperTurbo { "turbo" } else { "large-v3" };
                 rc.model_config.whisper = OfflineWhisperModelConfig {
-                    encoder: p(dir.join("turbo-encoder.int8.onnx")),
-                    decoder: p(dir.join("turbo-decoder.int8.onnx")),
+                    encoder: p(dir.join(format!("{name}-encoder.int8.onnx"))),
+                    decoder: p(dir.join(format!("{name}-decoder.int8.onnx"))),
                     // Без языка Whisper определяет его сам для каждого фрагмента.
                     language: Some(language.to_string()).filter(|l| !l.is_empty()),
                     task: Some("transcribe".into()),
@@ -91,14 +101,27 @@ impl AsrModel {
                     enable_token_timestamps: false,
                     enable_segment_timestamps: false,
                 };
-                rc.model_config.tokens = p(dir.join("turbo-tokens.txt"));
+                rc.model_config.tokens = p(dir.join(format!("{name}-tokens.txt")));
             }
-            Self::GlmAsr => unreachable!("GLM-ASR работает в llama.cpp, не в sherpa-onnx"),
+            Self::GlmAsr | Self::Tone => unreachable!("{} — не офлайн-модель sherpa-onnx", self.title()),
         }
         rc.model_config.num_threads = threads();
         rc.decoding_method = Some("greedy_search".into());
         rc
     }
+}
+
+/// Потоковая T-one: звук приводится к 8 кГц, как в телефонии, на которой её обучали.
+fn tone_config(models: &Path) -> OnlineRecognizerConfig {
+    let dir = models.join(AsrModel::Tone.dir());
+    let mut rc = OnlineRecognizerConfig::default();
+    rc.feat_config.sample_rate = 8000;
+    rc.feat_config.feature_dim = 80;
+    rc.model_config.t_one_ctc = OnlineToneCtcModelConfig { model: p(dir.join("model.onnx")) };
+    rc.model_config.tokens = p(dir.join("tokens.txt"));
+    rc.model_config.num_threads = threads();
+    rc.decoding_method = Some("greedy_search".into());
+    rc
 }
 
 /// Языки Parakeet TDT 0.6B v3.
@@ -144,6 +167,7 @@ pub struct Engines {
 
 enum Recognizer {
     Sherpa(OfflineRecognizer),
+    Online(OnlineRecognizer),
     Glm(crate::glm_asr::GlmAsr),
 }
 
@@ -174,6 +198,9 @@ impl Engines {
         let language = asr.language(language);
         let recognizer = match asr {
             AsrModel::GlmAsr => Recognizer::Glm(crate::glm_asr::GlmAsr::load(&models.join(asr.dir()))?),
+            AsrModel::Tone => Recognizer::Online(OnlineRecognizer::create(&tone_config(models)).ok_or_else(|| {
+                anyhow!("{} {}", tr("не удалось загрузить модель распознавания", "could not load the speech model"), asr.title())
+            })?),
             _ => Recognizer::Sherpa(OfflineRecognizer::create(&asr.config(models, &language)).ok_or_else(|| {
                 anyhow!("{} {}", tr("не удалось загрузить модель распознавания", "could not load the speech model"), asr.title())
             })?),
@@ -225,6 +252,7 @@ impl Engines {
         }
         let recognizer = match &self.recognizer {
             Recognizer::Sherpa(r) => r,
+            Recognizer::Online(r) => return clips.iter().map(|(offset, s)| decode_online(r, s, *offset)).collect(),
             Recognizer::Glm(glm) => {
                 return clips
                     .iter()
@@ -258,7 +286,9 @@ impl Engines {
                 st.get_result()
                     .map(|r| match self.asr {
                         AsrModel::Gigaam | AsrModel::Parakeet => tokens_to_words(&r.tokens, r.timestamps.as_deref(), *offset, end),
-                        AsrModel::WhisperTurbo | AsrModel::GlmAsr => text_to_words(&r.text, *offset, end),
+                        AsrModel::WhisperTurbo | AsrModel::WhisperLarge | AsrModel::GlmAsr | AsrModel::Tone => {
+                            text_to_words(&r.text, *offset, end)
+                        }
                     })
                     .unwrap_or_default()
             })
@@ -319,6 +349,29 @@ impl Engines {
     pub fn embed(&self, samples: &[f32]) -> Option<Vec<f32>> {
         self.voice.embed(samples)
     }
+}
+
+/// Потоковая модель на целом фрагменте: с тишиной по краям, как в примерах sherpa-onnx, —
+/// без неё модель теряет первое и последнее слово.
+fn decode_online(r: &OnlineRecognizer, samples: &[f32], offset: f32) -> Vec<Word> {
+    const LEFT: f32 = 0.3;
+    const RIGHT: f32 = 0.66;
+    let sr = SAMPLE_RATE as f32;
+    let st = r.create_stream();
+    st.accept_waveform(SAMPLE_RATE, &vec![0.0; (LEFT * sr) as usize]);
+    st.accept_waveform(SAMPLE_RATE, samples);
+    st.accept_waveform(SAMPLE_RATE, &vec![0.0; (RIGHT * sr) as usize]);
+    st.input_finished();
+    while r.is_ready(&st) {
+        r.decode(&st);
+    }
+    let end = offset + samples.len() as f32 / sr;
+    r.get_result(&st)
+        .map(|res| {
+            let ts: Option<Vec<f32>> = res.timestamps.map(|t| t.iter().map(|x| (x - LEFT).max(0.0)).collect());
+            tokens_to_words(&res.tokens, ts.as_deref(), offset, end)
+        })
+        .unwrap_or_default()
 }
 
 /// Сколько речи нужно для отпечатка голоса из файла, секунд.
@@ -531,6 +584,9 @@ mod tests {
         assert_eq!(AsrModel::Gigaam.language("en"), "ru");
         assert_eq!(AsrModel::GlmAsr.language("ru"), "ru");
         assert_eq!(AsrModel::GlmAsr.language("pl"), "");
+        assert_eq!(AsrModel::Tone.language("en"), "ru");
+        // Имена — как в окне (api.ts) и в базе.
+        assert_eq!(serde_json::to_string(&AsrModel::Tone).unwrap(), "\"t-one\"");
+        assert_eq!(serde_json::to_string(&AsrModel::WhisperLarge).unwrap(), "\"whisper-large\"");
     }
 }
-

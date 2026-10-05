@@ -72,7 +72,7 @@ pnpm build:demo     # то же одним файлом: demo/index.html отк�
                                          record.rs    захват с микрофона и звука компьютера (cpal) → 16 кГц → WAV; распознавание на ходу
                                          pipeline.rs  Ingest → Enhance → ASR → Diarize → Identify → Terms → Enrich → Export
                                          audio.rs     предобработка для распознавания: шумоподавление DPDFNet, выравнивание громкости
-                                         speech.rs    sherpa-onnx: GigaAM v3 | Whisper large-v3-turbo | Parakeet v3, Silero VAD, WeSpeaker
+                                         speech.rs    sherpa-onnx: GigaAM v3 | T-one (потоковая) | Whisper large-v3-turbo | large-v3 | Parakeet v3, Silero VAD, WeSpeaker
                                          glm_asr.rs   GLM-ASR-Nano: аудиоэнкодер + LLM в llama.cpp (mtmd), по фрагменту VAD
                                          diar/        диаризация: pyannote 3.0 | pyannote community-1 | Nemotron 3 | выключена
                                          llm.rs       LLM: встроенная (local_llm.rs, llama.cpp) или OpenAI-совместимый API

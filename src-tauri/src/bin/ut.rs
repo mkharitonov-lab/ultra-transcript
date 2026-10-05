@@ -1,5 +1,5 @@
 //! CLI для проверки конвейера без интерфейса:
-//! `ut <файл> [--protocol] [--whisper|--parakeet|--glm] [--lang <язык>] [--diar off|pyannote3|community1|nemotron3] [--threshold <порог>] [--llm <модель>] [--raw] [--live]`.
+//! `ut <файл> [--protocol] [--whisper|--whisper-large|--parakeet|--glm|--tone] [--lang <язык>] [--diar off|pyannote3|community1|nemotron3] [--threshold <порог>] [--llm <модель>] [--raw] [--live]`.
 //! `--raw` — без предобработки звука (шумоподавления и выравнивания громкости);
 //! `--lang` — язык записи для Whisper и Parakeet (ru, en… или auto); `--live` — печатать текст по мере распознавания.
 //! Вместо файла — `--record <секунд>`: запись с микрофона (`--mic <имя>` — какого) с текстом на ходу,
@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
         .map(String::as_str)
         .unwrap_or("");
     if file.is_empty() && record.is_none() {
-        anyhow::bail!("использование: ut <файл> [--protocol] [--whisper|--parakeet|--glm] [--diar <движок>] [--threshold <порог>] [--llm <модель>] [--raw] [--live] | ut --record <секунд> [--mic <имя>] [--meeting] | ut --devices");
+        anyhow::bail!("использование: ut <файл> [--protocol] [--whisper|--whisper-large|--parakeet|--glm|--tone] [--diar <движок>] [--threshold <порог>] [--llm <модель>] [--raw] [--live] | ut --record <секунд> [--mic <имя>] [--meeting] | ut --devices");
     }
     let raw = args.iter().any(|a| a == "--raw");
     // Своя библиотека во временной папке: CLI не должен подхватывать задачи
@@ -43,6 +43,10 @@ fn main() -> anyhow::Result<()> {
         AsrModel::Parakeet
     } else if args.iter().any(|a| a == "--glm") {
         AsrModel::GlmAsr
+    } else if args.iter().any(|a| a == "--whisper-large") {
+        AsrModel::WhisperLarge
+    } else if args.iter().any(|a| a == "--tone") {
+        AsrModel::Tone
     } else {
         AsrModel::Gigaam
     };

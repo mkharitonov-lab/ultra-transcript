@@ -78,6 +78,14 @@ pub fn catalog(dir: &Path) -> Vec<Model> {
             tr("Русская речь с пунктуацией", "Russian speech with punctuation"), tr("Сбер", "Sber"), 170),
         asr("whisper-turbo", AsrModel::WhisperTurbo, "Whisper large-v3-turbo",
             tr("Речь на разных языках", "Speech in many languages"), "OpenAI", 563),
+        asr("whisper-large", AsrModel::WhisperLarge, "Whisper large-v3",
+            tr("Речь на разных языках, точнее и медленнее turbo", "Speech in many languages, more accurate and slower than turbo"),
+            "OpenAI", 1068),
+        Model {
+            license: "Apache 2.0",
+            ..asr("t-one", AsrModel::Tone, "T-one",
+                  tr("Русская речь, телефонные разговоры", "Russian speech, phone calls"), tr("Т-Банк", "T-Bank"), 128)
+        },
         Model {
             license: "CC BY 4.0",
             ..asr("parakeet", AsrModel::Parakeet, "Parakeet TDT 0.6B v3",

@@ -16,7 +16,7 @@ export type Recording = {
 export type Folder = { id: number; name: string };
 export type Speaker = { id: string; name: string; person_id: number | null; similarity: number | null };
 export type Utterance = { id: number; speaker: string; start: number; end: number; raw: string; text: string; clean: string };
-export type AsrModel = "gigaam" | "whisper-turbo" | "parakeet" | "glm-asr";
+export type AsrModel = "gigaam" | "whisper-turbo" | "parakeet" | "glm-asr" | "whisper-large" | "t-one";
 /** Движок диаризации: без разделения, pyannote 3.0, pyannote community-1, NVIDIA Nemotron 3. */
 export type DiarModel = "off" | "pyannote3" | "community1" | "nemotron3";
 export type Transcript = {

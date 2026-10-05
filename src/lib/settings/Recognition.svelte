@@ -36,13 +36,16 @@
 <Group title={t("set.asr.model")} hint={t("set.asr.modelHint")} bare>
   <ModelChoice bind:value={s.asr_model} onchange={save} options={[
     { value: "gigaam", title: "GigaAM v3", model: model("gigaam") },
+    { value: "t-one", title: "T-one", model: model("t-one") },
     { value: "whisper-turbo", title: "Whisper large-v3-turbo", model: model("whisper-turbo") },
+    { value: "whisper-large", title: "Whisper large-v3", model: model("whisper-large") },
     { value: "parakeet", title: "Parakeet TDT 0.6B v3", model: model("parakeet") },
     { value: "glm-asr", title: "GLM-ASR-Nano", model: model("glm-asr") },
   ]} />
 </Group>
 
-{#if s.asr_model !== "gigaam"}
+<!-- GigaAM и T-one знают только русский. -->
+{#if s.asr_model !== "gigaam" && s.asr_model !== "t-one"}
   <Group>
     <Row label={t("set.asr.language")} hint={t("set.asr.languageHint")}>
       <select value={language} onchange={pickLanguage}>

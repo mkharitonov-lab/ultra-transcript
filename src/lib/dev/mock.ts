@@ -39,6 +39,8 @@ function models(): Model[] {
   const all = [
     m("gigaam", "asr", "GigaAM v3", l("Русская речь с пунктуацией", "Russian speech with punctuation"), l("Сбер", "Sber"), "MIT", 170, { asr: "gigaam" }),
     m("whisper-turbo", "asr", "Whisper large-v3-turbo", l("Речь на разных языках", "Speech in many languages"), "OpenAI", "MIT", 563, { asr: "whisper-turbo" }),
+    m("whisper-large", "asr", "Whisper large-v3", l("Речь на разных языках, точнее и медленнее turbo", "Speech in many languages, more accurate and slower than turbo"), "OpenAI", "MIT", 1068, { asr: "whisper-large" }),
+    m("t-one", "asr", "T-one", l("Русская речь, телефонные разговоры", "Russian speech, phone calls"), l("Т-Банк", "T-Bank"), "Apache 2.0", 128, { asr: "t-one" }),
     m("parakeet", "asr", "Parakeet TDT 0.6B v3", l("Речь на 25 европейских языках", "Speech in 25 European languages"), "NVIDIA", "CC BY 4.0", 487, { asr: "parakeet" }),
     m("glm-asr", "asr", "GLM-ASR-Nano", l("Речь на 17 языках, распознаёт языковая модель", "Speech in 17 languages, recognized by a language model"), "Zhipu AI", "Apache 2.0", 1700, { asr: "glm-asr" }),
     m("vad", "core", "Silero VAD", l("Поиск речи в записи", "Finds speech in a recording"), "Silero", "MIT", 1),
