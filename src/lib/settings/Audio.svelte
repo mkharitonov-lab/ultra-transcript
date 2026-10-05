@@ -10,6 +10,7 @@
   import Toggle from "../ui/Toggle.svelte";
 
   const s = $derived(app.settings!);
+  const kbps = [16, 24, 32, 48];
   const save = () => app.saveSettings();
   const denoiser = $derived(app.info?.models.find((m) => m.kind === "denoise"));
   const loading = $derived(denoiser ? models.progress(denoiser.name) : undefined);
@@ -52,5 +53,13 @@
   </Row>
   <Row label={t("set.audio.level")} hint={t("set.audio.levelHint")}>
     <Toggle bind:checked={s.level_volume} onchange={save} label={t("set.audio.level")} />
+  </Row>
+</Group>
+
+<Group title={t("set.audio.archive")}>
+  <Row label={t("set.dev.bitrate")} hint={t("set.dev.bitrateHint")}>
+    <select bind:value={s.archive_kbps} onchange={save}>
+      {#each kbps as k (k)}<option value={k}>{t("set.dev.kbps", { k, mb: Math.round(k * 0.45) })}</option>{/each}
+    </select>
   </Row>
 </Group>

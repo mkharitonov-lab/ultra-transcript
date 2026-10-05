@@ -45,8 +45,27 @@
   </Group>
 {/if}
 
+<!-- Строгость разделения и узнавания: раньше — только в режиме разработчика. -->
+<Group title={t("set.diar.strictness")}>
+  {#if s.diar_model === "pyannote3"}
+    <Row label={t("set.dev.cluster")} hint={t("set.dev.clusterHint")}>
+      <input type="range" min="0.2" max="0.8" step="0.05" bind:value={s.cluster_threshold} onchange={save} />
+      <span class="num">{s.cluster_threshold.toFixed(2)}</span>
+    </Row>
+  {/if}
+  <Row label={t("set.dev.voice")} hint={t("set.dev.voiceHint")}>
+    <input type="range" min="0.35" max="0.85" step="0.05" bind:value={s.voice_threshold} onchange={save} />
+    <span class="num">{s.voice_threshold.toFixed(2)}</span>
+  </Row>
+</Group>
+
 <Group title={t("set.voices.title")}>
   <Row label={t("set.voices.how")} hint={t("set.voices.howHint")}>
     <button onclick={() => app.go("people")}>{t("set.voices.open")}</button>
   </Row>
 </Group>
+
+<style>
+  input[type="range"] { width: 180px; accent-color: var(--accent); }
+  .num { width: 34px; text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-muted); }
+</style>

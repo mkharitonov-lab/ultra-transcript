@@ -1,4 +1,4 @@
-//! NVIDIA Nemotron 3 Diarization через NeMo-Speech.cpp (C API, модель GGUF, видеокарта Mac через Metal).
+//! NVIDIA Nemotron 3 Diarization через NeMo-Speech.cpp (C API, модель GGUF; на Mac — Metal, на Windows — процессор).
 //! Одна нейросеть сразу выдаёт, кто когда говорит (до 8 спикеров), — без отпечатков и кластеризации.
 //! Библиотека не линкуется, а подгружается при выборе движка: без неё приложение работает,
 //! а движок недоступен. Собрать её — `src-tauri/scripts/build-nemo-speech.sh`.
@@ -19,15 +19,18 @@ const LIBRARY: &str = "nemo_speech_asr_c.dll";
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 const LIBRARY: &str = "libnemo_speech_asr_c.so.1";
 
-/// Где искать библиотеку: `UT_NEMO_SPEECH_DIR`, Frameworks внутри .app, рядом с программой,
-/// результат `scripts/build-nemo-speech.sh` при запуске из исходников.
+/// Где искать библиотеку: `UT_NEMO_SPEECH_DIR`, Frameworks внутри .app, папка `nemo` рядом
+/// с программой (установщик Windows), рядом с программой, результат `scripts/build-nemo-speech.sh`
+/// при запуске из исходников.
 pub fn library_path() -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::env::var_os("UT_NEMO_SPEECH_DIR").map(PathBuf::from).into_iter().collect();
     if let Some(exe_dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
         dirs.push(exe_dir.join("../Frameworks"));
+        dirs.push(exe_dir.join("nemo"));
         dirs.push(exe_dir);
     }
     dirs.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("target/nemo-speech/lib"));
+    dirs.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("target/nemo-speech/bin"));
     dirs.into_iter().map(|d| d.join(LIBRARY)).find(|p| p.exists())
 }
 
@@ -70,13 +73,26 @@ struct Api {
     _library: libloading::Library,
 }
 
+/// На Windows зависимости (ggml*.dll) ищутся рядом с самой библиотекой, а не только рядом с программой.
+unsafe fn load(path: &Path) -> std::result::Result<libloading::Library, libloading::Error> {
+    #[cfg(windows)]
+    {
+        use libloading::os::windows::{Library, LOAD_WITH_ALTERED_SEARCH_PATH};
+        unsafe { Library::load_with_flags(path, LOAD_WITH_ALTERED_SEARCH_PATH) }.map(Into::into)
+    }
+    #[cfg(not(windows))]
+    unsafe {
+        libloading::Library::new(path)
+    }
+}
+
 fn api() -> Result<&'static Api> {
     static API: OnceLock<std::result::Result<Api, String>> = OnceLock::new();
     API.get_or_init(|| {
         let path = library_path().ok_or("библиотека NeMo-Speech.cpp не найдена — соберите её: src-tauri/scripts/build-nemo-speech.sh")?;
         // SAFETY: загружается библиотека NeMo-Speech.cpp; типы функций — из её заголовка diar.h.
         unsafe {
-            let lib = libloading::Library::new(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let lib = load(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             fn sym<T: Copy>(lib: &libloading::Library, name: &[u8]) -> std::result::Result<T, String> {
                 // SAFETY: тип T задан полем Api и совпадает с объявлением в diar.h.
                 unsafe { lib.get::<T>(name) }.map(|s| *s).map_err(|e| e.to_string())

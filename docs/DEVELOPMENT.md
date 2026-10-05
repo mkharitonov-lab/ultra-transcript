@@ -24,8 +24,13 @@ CI берёт готовую LGPL-сборку BtbN. Без этого файл�
 
 **Релизы** собирает GitHub Actions (`.github/workflows/release.yml`): по тегу `v*` — `.dmg` для Mac
 (Apple Silicon) и установщик NSIS (`-setup.exe`) для Windows x64, черновиком на странице Releases. Подписи Apple нет:
-сборка подписана локально (`signingIdentity: "-"`), пользователь при первом запуске нажимает
-«Всё равно открыть» (README, «Первый запуск»). Локально `.dmg` собирается с `CI=true pnpm tauri build`:
+сборка подписана локально (`signingIdentity: "-"`) с hardened runtime и разрешениями из
+`src-tauri/Entitlements.plist`: без `device.audio-input` macOS не спрашивает доступ к микрофону и отдаёт
+тишину, без `disable-library-validation` не загружает NeMo-Speech.cpp. Пользователь при первом запуске нажимает
+«Всё равно открыть» (README, «Первый запуск»). NeMo-Speech.cpp для Nemotron 3 CI собирает сам
+(`build-nemo-speech.sh`, на Windows — пресет `cpu-diar`) и кладёт в установщик: на Mac — в Frameworks,
+на Windows — в папку `nemo` рядом с программой (`tauri.nemotron.windows.conf.json`). Не собралась —
+установщик выходит без неё. Локально `.dmg` собирается с `CI=true pnpm tauri build`:
 без этого скрипт упаковки оформляет окно образа через Finder и падает, если доступа к Finder нет.
 
 Уведомления на macOS работают только в собранном `.app` (`pnpm tauri build --debug --bundles app`),

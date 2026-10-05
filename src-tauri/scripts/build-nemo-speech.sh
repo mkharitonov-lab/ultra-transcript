@@ -3,6 +3,7 @@
 # Приложение подгружает её при выборе движка; без неё Nemotron 3 просто недоступен.
 # Готовых сборок с Nemotron 3 пока нет (v0.1.0 вышла раньше модели), поэтому из исходников.
 # Нужны: git, cmake ≥ 3.26, ninja (brew install cmake ninja), Xcode Command Line Tools.
+# На Windows — Git Bash в окружении MSVC (Developer Command Prompt), ninja; библиотеки — в bin/.
 set -euo pipefail
 
 NEMO_COMMIT=97a15afa5caa9bce5baaa86c1184103877af4101        # 2026-09-24: Nemotron 3 Diarization
@@ -12,7 +13,8 @@ SENTENCEPIECE_COMMIT=17d7580d6407802f85855d2cc9190634e2c95624 # та же, чт�
 MACOS_MIN=13.3
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="$ROOT/target/nemo-speech-build"
+# Папка сборки; в CI — вне target, чтобы кэш Rust не обходил исходники.
+WORK="${NEMO_BUILD_DIR:-$ROOT/target/nemo-speech-build}"
 PREFIX="$ROOT/target/nemo-speech"
 mkdir -p "$WORK"
 
@@ -38,6 +40,8 @@ cmake -G Ninja -S "$WORK/sentencepiece" -B "$WORK/sentencepiece-build" -DCMAKE_B
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN" >/dev/null
 cmake --build "$WORK/sentencepiece-build" --target sentencepiece-static
+# libsentencepiece.a на Mac, sentencepiece.lib на Windows.
+SPM_LIB="$(find "$WORK/sentencepiece-build/src" -maxdepth 1 \( -name 'libsentencepiece.a' -o -name 'sentencepiece.lib' \) | head -1)"
 
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) PRESET=metal-diar ;;
@@ -45,7 +49,7 @@ case "$(uname -s)-$(uname -m)" in
 esac
 cd "$WORK/src"
 scripts/configure.sh "$PRESET" \
-    -DSENTENCEPIECE_LIB="$WORK/sentencepiece-build/src/libsentencepiece.a" \
+    -DSENTENCEPIECE_LIB="$SPM_LIB" \
     -DSENTENCEPIECE_INCLUDE_DIR="$WORK/sentencepiece/src" \
     -DNEMO_SPEECH_BUILD_CLI=OFF -DNEMO_SPEECH_BUILD_MIC_CAPTURE=OFF \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN"

@@ -37,10 +37,12 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             bundles: app,dmg
+            nemo_config: src-tauri/tauri.nemotron.conf.json
           # Только NSIS: WiX собирает .msi в кодировке 1252 и падает на кириллице в названии.
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bundles: nsis
+            nemo_config: src-tauri/tauri.nemotron.windows.conf.json
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -112,12 +114,35 @@ jobs:
         shell: bash
         run: echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
 
+      # Nemotron 3: библиотека NeMo-Speech.cpp, из исходников (готовых сборок с этой моделью нет).
+      # Если не собралась — установщик выходит без неё, движок просто не показывается.
+      - name: NeMo-Speech.cpp (кэш)
+        uses: actions/cache@v6
+        id: nemo-cache
+        with:
+          path: src-tauri/target/nemo-speech
+          key: nemo-${{ matrix.target }}-${{ hashFiles('src-tauri/scripts/build-nemo-speech.sh') }}
+      - name: NeMo-Speech.cpp
+        id: nemo
+        continue-on-error: true
+        shell: bash
+        env:
+          NEMO_BUILD_DIR: ${{ runner.temp }}/nemo-build
+        run: |
+          if [ "${{ steps.nemo-cache.outputs.cache-hit }}" != "true" ]; then
+            if [ "$RUNNER_OS" = macOS ]; then brew install ninja; fi
+            src-tauri/scripts/build-nemo-speech.sh
+          fi
+          ls src-tauri/target/nemo-speech/lib src-tauri/target/nemo-speech/bin 2>/dev/null || true
+
       - uses: tauri-apps/tauri-action@action-v1.0.0
         id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          args: >-
+            --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+            ${{ steps.nemo.outcome == 'success' && format('--config {0}', matrix.nemo_config) || '' }}
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: "Ультра Транскрибатор ${{ github.ref_name }}"
           releaseBody: "Установка и первый запуск — в README."
