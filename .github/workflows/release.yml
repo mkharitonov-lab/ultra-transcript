@@ -66,12 +66,14 @@ jobs:
       # Встроенная LLM на Windows работает через Vulkan: для сборки нужен Vulkan SDK.
       - name: Vulkan SDK
         if: runner.os == 'Windows'
-        uses: humbletim/install-vulkan-sdk@v1.2
+        uses: jakoch/install-vulkan-sdk-action@v1.6.0
         with:
-          version: latest
+          vulkan_version: 1.4.321.1
+          install_runtime: false
           cache: true
+          stripdown: true
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@action-v1.0.0
         id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -81,6 +83,8 @@ jobs:
           releaseName: "Ультра Транскрибатор ${{ github.ref_name }}"
           releaseBody: "Установка и первый запуск — в README."
           releaseDraft: true
+          # GitHub выбрасывает из имён файлов кириллицу («Ультра Транскрибатор» → «_0.2.0_aarch64.dmg»).
+          releaseAssetNamePattern: "UltraTranscript_[version]_[arch][setup][ext]"
 
       - uses: actions/upload-artifact@v4
         with:
