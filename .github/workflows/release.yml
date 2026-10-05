@@ -23,12 +23,12 @@ jobs:
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -44,13 +44,15 @@ jobs:
       # FFmpeg в поставке. Mac: свой минимальный (только звук, LGPL), собирается из исходников.
       - name: FFmpeg (Mac)
         if: runner.os == 'macOS'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         id: ffmpeg-cache
         with:
           path: src-tauri/binaries
           key: ffmpeg-${{ matrix.target }}-${{ hashFiles('src-tauri/scripts/build-ffmpeg.sh') }}
       - if: runner.os == 'macOS' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
         run: src-tauri/scripts/build-ffmpeg.sh
+        env:
+          FFMPEG_BUILD_DIR: ${{ runner.temp }}/ffmpeg-build
 
       # Windows: готовая LGPL-сборка BtbN (с libopus — им сжимается архив записи).
       - name: FFmpeg (Windows)
@@ -86,7 +88,7 @@ jobs:
           # GitHub выбрасывает из имён файлов кириллицу («Ультра Транскрибатор» → «_0.2.0_aarch64.dmg»).
           releaseAssetNamePattern: "UltraTranscript_[version]_[arch][setup][ext]"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bundle-${{ matrix.target }}
           path: |

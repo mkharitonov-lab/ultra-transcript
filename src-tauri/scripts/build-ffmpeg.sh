@@ -13,7 +13,8 @@ OPUS_VERSION=1.5.2
 here="$(cd "$(dirname "$0")/.." && pwd)"
 triple="$(rustc -vV | sed -n 's/^host: //p')"
 out="$here/binaries/ffmpeg-$triple"
-work="$here/target/ffmpeg-build"
+# Папка сборки; в CI — вне target, чтобы кэш Rust не обходил исходники opus и ffmpeg.
+work="${FFMPEG_BUILD_DIR:-$here/target/ffmpeg-build}"
 prefix="$work/prefix"
 jobs="$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
 export MACOSX_DEPLOYMENT_TARGET=14.2
