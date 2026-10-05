@@ -7,16 +7,26 @@
 
 ## Сборка
 
-Нужны [Node.js](https://nodejs.org) с [pnpm](https://pnpm.io), [Rust](https://rustup.rs) и FFmpeg
-(`brew install ffmpeg`); на Mac — ещё Xcode Command Line Tools.
+Нужны [Node.js](https://nodejs.org) с [pnpm](https://pnpm.io) и [Rust](https://rustup.rs); на Mac — ещё
+Xcode Command Line Tools, на Windows — Visual Studio Build Tools и [Vulkan SDK](https://vulkan.lunarg.com).
 
 ```bash
+src-tauri/scripts/build-ffmpeg.sh   # FFmpeg для поставки (Mac, один раз, ≈2 мин)
 pnpm install
 pnpm tauri dev                      # приложение в режиме разработки
 pnpm tauri build --bundles app      # сборка .app
 ```
 
-FFmpeg приложение ищет рядом со своим исполняемым файлом, затем в системе. В поставку он не входит.
+FFmpeg входит в поставку: Tauri кладёт `src-tauri/binaries/ffmpeg-<платформа>` рядом с исполняемым
+файлом (`bundle.externalBin`), там приложение его и ищет, затем — в системе. На Mac он собирается
+`build-ffmpeg.sh`: только звук, лицензия LGPL, libopus внутри, без зависимостей от Homebrew. На Windows
+CI берёт готовую LGPL-сборку BtbN. Без этого файла `tauri build` и `tauri dev` не запустятся.
+
+**Релизы** собирает GitHub Actions (`.github/workflows/release.yml`): по тегу `v*` — `.dmg` для Mac
+(Apple Silicon) и `.msi`/`.exe` для Windows x64, черновиком на странице Releases. Подписи Apple нет:
+сборка подписана локально (`signingIdentity: "-"`), пользователь при первом запуске нажимает
+«Всё равно открыть» (README, «Первый запуск»). Локально `.dmg` собирается с `CI=true pnpm tauri build`:
+без этого скрипт упаковки оформляет окно образа через Finder и падает, если доступа к Finder нет.
 
 Уведомления на macOS работают только в собранном `.app` (`pnpm tauri build --debug --bundles app`),
 в `tauri dev` их нет. Разрешение система спрашивает при первом запуске.
@@ -41,7 +51,7 @@ cd src-tauri && cargo test --lib    # тесты ядра
 Конвейер без интерфейса:
 
 ```bash
-cd src-tauri && cargo run --release --bin ut -- запись.m4a [--protocol] [--whisper] [--lang en] \
+cd src-tauri && cargo run --release --features cli --bin ut -- запись.m4a [--protocol] [--whisper] [--lang en] \
   [--diar off|pyannote3|community1|nemotron3] [--threshold 0.6] [--llm gigachat-lightning] [--raw] [--live]
 ```
 

@@ -295,6 +295,9 @@ fn clipboard_text() -> R<String> {
     } else if cfg!(windows) {
         let mut c = std::process::Command::new("powershell");
         c.args(["-NoProfile", "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw"]);
+        // Без окна консоли: иначе оно мелькает при каждой вставке.
+        #[cfg(windows)]
+        std::os::windows::process::CommandExt::creation_flags(&mut c, 0x0800_0000);
         c
     } else {
         let mut c = std::process::Command::new("xclip");

@@ -35,8 +35,9 @@ minutes with decisions and action items. It runs on your own computer: recording
 
 ## Getting started
 
-1. **Install the app.** There are no ready-made builds yet — the app is built from source, which takes
-   about ten minutes: see [Building](docs/DEVELOPMENT.md#сборка) (in Russian).
+1. **Install the app.** Download the installer from [Releases](../../releases/latest): `.dmg` for Mac,
+   `.msi` or `.exe` for Windows. The app is not yet signed with an Apple or Microsoft certificate,
+   so the system warns you on first launch — see [First launch](#first-launch).
 2. **Download the models.** On first launch the app offers to download the recognition models, about 215 MB.
    This is done once.
 3. **Add a recording.** Drop a file on the window or click “Add files”. Text starts to appear
@@ -45,6 +46,18 @@ minutes with decisions and action items. It runs on your own computer: recording
 
 GigaAM v3 and T-one are Russian-only: for recordings in other languages choose Whisper, Parakeet or GLM-ASR in Settings → Speech recognition.
 The interface is available in English and Russian, with light and dark themes.
+
+### First launch
+
+**Mac.** Drag the app from the `.dmg` to Applications and open it. macOS says it cannot check it for
+malicious software — click Done. Then open System Settings → Privacy & Security, click “Open Anyway”
+at the bottom and confirm with your password. This is needed once. The same in one Terminal command:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Ультра Транскрибатор.app"
+```
+
+**Windows.** If “Windows protected your PC” appears, click “More info” → “Run anyway”.
 
 ## Getting the best results
 
@@ -73,11 +86,11 @@ an external server to it yourself.
 
 | | Mac | Windows (preliminary) |
 |---|---|---|
+| System | macOS 14.2 or later; recording video calls needs 14.4 | Windows 10 or 11, 64-bit |
 | Transcription and voices | Apple Silicon, 16 GB of memory | 4 cores, 8 GB of memory |
 | AI assistant | 16 GB of memory; 8 GB is enough for Qwen3 4B | 16 GB of memory and a GPU with 8 GB — or an external server |
 
-Reading audio and video requires [FFmpeg](https://ffmpeg.org); on a Mac install it with
-`brew install ffmpeg`.
+The app reads audio and video with [FFmpeg](https://ffmpeg.org), which ships with the installer.
 
 ## License
 

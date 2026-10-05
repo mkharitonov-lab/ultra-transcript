@@ -16,6 +16,16 @@ default-run = "ultra-transcript"
 name = "ultra_transcript_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# CLI `ut` для проверки конвейера без окна. Собирается только с `--features cli`:
+# иначе Tauri кладёт его в установщик вместе с приложением.
+[features]
+cli = []
+
+[[bin]]
+name = "ut"
+path = "src/bin/ut.rs"
+required-features = ["cli"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

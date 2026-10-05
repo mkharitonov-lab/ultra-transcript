@@ -1,0 +1,4 @@
+# Windows: sherpa-onnx поставляется собранным со статической CRT (/MT) — остальное приложение
+# собирается так же, иначе линковщик не сведёт библиотеки (LNK2038, несовпадение RuntimeLibrary).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -47,16 +47,27 @@ any use that the application's own license or a model's license may restrict.
 
 ## 2. Programs that are not part of the application · Программы, которые не входят в состав приложения
 
-**FFmpeg** (ffmpeg.org, LGPL 2.1+ / GPL 2+ depending on the build). The application does not include
-FFmpeg. It runs the `ffmpeg` program installed on the user's computer as a separate process to read
-audio and video files.
-
 **NeMo-Speech.cpp** (github.com/NVIDIA/NeMo-Speech.cpp, Apache 2.0, with ggml — MIT and SentencePiece —
 Apache 2.0). Optional and not included: needed only for Nemotron 3 and built by the user from source with
 `src-tauri/scripts/build-nemo-speech.sh`. Anyone who distributes a build that includes this library must
 ship its license files with it.
 
-## 3. Libraries built into the application · Библиотеки в составе приложения
+## 3. FFmpeg in the installer · FFmpeg в установщике
+
+**FFmpeg** (ffmpeg.org, LGPL 2.1 or later) ships with the application as a separate program, `ffmpeg`,
+next to the application's executable. The application runs it as a separate process to read audio
+and video files and to compress recordings; it is not linked into the application, and you may replace
+it with your own build. The builds are LGPL-only (no GPL or non-free components):
+
+- Mac: FFmpeg 7.1.1 with libopus 1.5.2 (BSD 3-Clause), built by `src-tauri/scripts/build-ffmpeg.sh` from
+  the official sources — ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz, downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz.
+  The script contains the complete build configuration.
+- Windows: the `win64-lgpl` build of FFmpeg 8.1 from github.com/BtbN/FFmpeg-Builds; its sources and build
+  scripts are published there.
+
+FFmpeg's license: www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
+
+## 4. Libraries built into the application · Библиотеки в составе приложения
 
 | Component | License |
 |---|---|

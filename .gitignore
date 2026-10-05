@@ -9,3 +9,6 @@ node_modules
 !.env.example
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# FFmpeg для поставки: собирается scripts/build-ffmpeg.sh (Mac) или скачивается в CI (Windows)
+/src-tauri/binaries
