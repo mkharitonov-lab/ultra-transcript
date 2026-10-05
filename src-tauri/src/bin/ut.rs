@@ -1,5 +1,5 @@
 //! CLI для проверки конвейера без интерфейса:
-//! `ut <файл> [--protocol] [--whisper|--parakeet] [--lang <язык>] [--diar off|pyannote3|community1|nemotron3] [--threshold <порог>] [--llm <модель>] [--raw] [--live]`.
+//! `ut <файл> [--protocol] [--whisper|--parakeet|--glm] [--lang <язык>] [--diar off|pyannote3|community1|nemotron3] [--threshold <порог>] [--llm <модель>] [--raw] [--live]`.
 //! `--raw` — без предобработки звука (шумоподавления и выравнивания громкости);
 //! `--lang` — язык записи для Whisper и Parakeet (ru, en… или auto); `--live` — печатать текст по мере распознавания.
 //! Вместо файла — `--record <секунд>`: запись с микрофона (`--mic <имя>` — какого) с текстом на ходу,
@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
         .map(String::as_str)
         .unwrap_or("");
     if file.is_empty() && record.is_none() {
-        anyhow::bail!("использование: ut <файл> [--protocol] [--whisper|--parakeet] [--diar <движок>] [--threshold <порог>] [--llm <модель>] [--raw] [--live] | ut --record <секунд> [--mic <имя>] [--meeting] | ut --devices");
+        anyhow::bail!("использование: ut <файл> [--protocol] [--whisper|--parakeet|--glm] [--diar <движок>] [--threshold <порог>] [--llm <модель>] [--raw] [--live] | ut --record <секунд> [--mic <имя>] [--meeting] | ut --devices");
     }
     let raw = args.iter().any(|a| a == "--raw");
     // Своя библиотека во временной папке: CLI не должен подхватывать задачи
@@ -41,6 +41,8 @@ fn main() -> anyhow::Result<()> {
         AsrModel::WhisperTurbo
     } else if args.iter().any(|a| a == "--parakeet") {
         AsrModel::Parakeet
+    } else if args.iter().any(|a| a == "--glm") {
+        AsrModel::GlmAsr
     } else {
         AsrModel::Gigaam
     };
@@ -148,6 +150,8 @@ fn main() -> anyhow::Result<()> {
         if !u.clean.is_empty() && u.clean != u.text { println!("        ~ {}", u.clean); }
     }
     println!("\nпапка: {}", store.recording_dir(&id).display());
-    ultra_transcript_lib::local_llm::unload(); // иначе llama.cpp падает при выходе, освобождая видеопамять
+    // Иначе llama.cpp падает при выходе, освобождая видеопамять.
+    ultra_transcript_lib::local_llm::unload();
+    ultra_transcript_lib::glm_asr::unload();
     Ok(())
 }

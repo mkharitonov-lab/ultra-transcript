@@ -121,13 +121,14 @@ pub fn on_run_event(app: &AppHandle, event: RunEvent) {
     match event {
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => show_window(app),
-        // Модель выгружаем до выхода: иначе llama.cpp падает, освобождая видеопамять при завершении.
+        // Модели llama.cpp (ИИ-помощник, GLM-ASR) выгружаем до выхода: иначе llama.cpp падает, освобождая видеопамять при завершении.
         // Идущая запись закрывается, чтобы файл был цел: расшифруется при следующем запуске.
         RunEvent::Exit => {
             if let Some(svc) = app.try_state::<Arc<Service>>() {
                 svc.finish_recording();
             }
             crate::local_llm::unload();
+            crate::glm_asr::unload();
         }
         _ => {}
     }

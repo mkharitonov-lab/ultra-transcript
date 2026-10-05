@@ -83,6 +83,16 @@ pub fn catalog(dir: &Path) -> Vec<Model> {
             ..asr("parakeet", AsrModel::Parakeet, "Parakeet TDT 0.6B v3",
                   tr("Речь на 25 европейских языках", "Speech in 25 European languages"), "NVIDIA", 487)
         },
+        Model {
+            license: "Apache 2.0",
+            files: [crate::glm_asr::MODEL_FILE, crate::glm_asr::MMPROJ_FILE]
+                .map(|f| format!("https://huggingface.co/concedo/GLM-ASR-Nano-2512-GGUF/resolve/c86e98608bc49264a1526d35a74174f99064240c/{f}"))
+                .into(),
+            url: String::new(),
+            ..asr("glm-asr", AsrModel::GlmAsr, "GLM-ASR-Nano",
+                  tr("Речь на 17 языках, распознаёт языковая модель", "Speech in 17 languages, recognized by a language model"),
+                  "Zhipu AI", 1700)
+        },
         m("vad", "Silero VAD", tr("Поиск речи в записи", "Finds speech in a recording"), "Silero", "MIT",
           format!("{BASE}/asr-models/{}", speech::VAD_FILE), speech::VAD_FILE, 1),
         m("segmentation", "pyannote segmentation 3.0", tr("Границы реплик", "Finds who speaks when"), "pyannote", "MIT",

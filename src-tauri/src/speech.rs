@@ -19,6 +19,8 @@ pub enum AsrModel {
     WhisperTurbo,
     /// Parakeet TDT 0.6B v3 (NVIDIA): 25 европейских языков, язык определяет сама.
     Parakeet,
+    /// GLM-ASR-Nano (Zhipu AI): распознавание языковой моделью в llama.cpp, 17 языков.
+    GlmAsr,
 }
 
 impl AsrModel {
@@ -27,6 +29,7 @@ impl AsrModel {
             Self::Gigaam => "sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16",
             Self::WhisperTurbo => "sherpa-onnx-whisper-turbo",
             Self::Parakeet => "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+            Self::GlmAsr => "glm-asr-nano-2512",
         }
     }
 
@@ -35,19 +38,21 @@ impl AsrModel {
             Self::Gigaam => "GigaAM v3",
             Self::WhisperTurbo => "Whisper large-v3-turbo",
             Self::Parakeet => "Parakeet TDT 0.6B v3",
+            Self::GlmAsr => "GLM-ASR-Nano",
         }
     }
 
     /// Язык, на котором модель распознаёт: GigaAM — только русский, Whisper и Parakeet — заданный
     /// (`language`) или, если задано "auto", определяют сами — тогда здесь пусто.
     /// Parakeet язык напрямую не задаётся: фрагменты не на том языке она распознаёт повторно
-    /// (см. `Engines::fix_language`).
+    /// (см. `Engines::fix_language`). GLM-ASR язык подсказывается инструкцией (`glm_asr::task`).
     pub fn language(self, language: &str) -> String {
         let language = language.trim().to_lowercase();
         match self {
             Self::Gigaam => "ru".into(),
             _ if language == "auto" => String::new(),
             Self::Parakeet if !PARAKEET_LANGUAGES.contains(&language.as_str()) => String::new(),
+            Self::GlmAsr if !crate::glm_asr::LANGUAGES.iter().any(|(c, _)| *c == language) => String::new(),
             _ => language,
         }
     }
@@ -88,6 +93,7 @@ impl AsrModel {
                 };
                 rc.model_config.tokens = p(dir.join("turbo-tokens.txt"));
             }
+            Self::GlmAsr => unreachable!("GLM-ASR работает в llama.cpp, не в sherpa-onnx"),
         }
         rc.model_config.num_threads = threads();
         rc.decoding_method = Some("greedy_search".into());
@@ -132,8 +138,13 @@ pub struct Engines {
     pub asr: AsrModel,
     /// Язык распознавания; пусто — модель определяет его сама.
     pub language: String,
-    recognizer: OfflineRecognizer,
+    recognizer: Recognizer,
     voice: VoicePrinter,
+}
+
+enum Recognizer {
+    Sherpa(OfflineRecognizer),
+    Glm(crate::glm_asr::GlmAsr),
 }
 
 /// Поиск речи и голосовые эмбеддинги — без распознавания и диаризации: этого хватает,
@@ -161,9 +172,12 @@ impl Engines {
     /// `language` — язык записей из настроек (код или "auto"); нужен только Whisper.
     pub fn load(models: &Path, asr: AsrModel, language: &str) -> Result<Self> {
         let language = asr.language(language);
-        let recognizer = OfflineRecognizer::create(&asr.config(models, &language)).ok_or_else(|| {
-            anyhow!("{} {}", tr("не удалось загрузить модель распознавания", "could not load the speech model"), asr.title())
-        })?;
+        let recognizer = match asr {
+            AsrModel::GlmAsr => Recognizer::Glm(crate::glm_asr::GlmAsr::load(&models.join(asr.dir()))?),
+            _ => Recognizer::Sherpa(OfflineRecognizer::create(&asr.config(models, &language)).ok_or_else(|| {
+                anyhow!("{} {}", tr("не удалось загрузить модель распознавания", "could not load the speech model"), asr.title())
+            })?),
+        };
         let voice = VoicePrinter::load(models)?;
         Ok(Self { asr, language, recognizer, voice })
     }
@@ -209,15 +223,33 @@ impl Engines {
         if clips.is_empty() {
             return vec![];
         }
+        let recognizer = match &self.recognizer {
+            Recognizer::Sherpa(r) => r,
+            Recognizer::Glm(glm) => {
+                return clips
+                    .iter()
+                    .map(|(offset, s)| {
+                        let end = offset + s.len() as f32 / SAMPLE_RATE as f32;
+                        match glm.transcribe(s, &self.language) {
+                            Ok(text) => text_to_words(&text, *offset, end),
+                            Err(e) => {
+                                eprintln!("GLM-ASR: {e:#}");
+                                vec![]
+                            }
+                        }
+                    })
+                    .collect();
+            }
+        };
         let streams: Vec<_> = clips
             .iter()
             .map(|(_, s)| {
-                let st = self.recognizer.create_stream();
+                let st = recognizer.create_stream();
                 st.accept_waveform(SAMPLE_RATE, s);
                 st
             })
             .collect();
-        self.recognizer.decode_multiple_streams(&streams.iter().collect::<Vec<_>>());
+        recognizer.decode_multiple_streams(&streams.iter().collect::<Vec<_>>());
         clips
             .iter()
             .zip(&streams)
@@ -226,7 +258,7 @@ impl Engines {
                 st.get_result()
                     .map(|r| match self.asr {
                         AsrModel::Gigaam | AsrModel::Parakeet => tokens_to_words(&r.tokens, r.timestamps.as_deref(), *offset, end),
-                        AsrModel::WhisperTurbo => text_to_words(&r.text, *offset, end),
+                        AsrModel::WhisperTurbo | AsrModel::GlmAsr => text_to_words(&r.text, *offset, end),
                     })
                     .unwrap_or_default()
             })
@@ -398,7 +430,7 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
-/// Whisper не даёт надёжных таймкодов слов: распределяем слова по фрагменту
+/// Whisper и GLM-ASR не дают надёжных таймкодов слов: распределяем слова по фрагменту
 /// пропорционально длине. Фрагменты короткие (≤ 20 с), для разметки спикеров этого хватает.
 fn text_to_words(text: &str, offset: f32, end: f32) -> Vec<Word> {
     if is_hallucination(text) {
@@ -497,5 +529,8 @@ mod tests {
         assert_eq!(AsrModel::Parakeet.language("auto"), "");
         assert_eq!(AsrModel::WhisperTurbo.language("zh"), "zh");
         assert_eq!(AsrModel::Gigaam.language("en"), "ru");
+        assert_eq!(AsrModel::GlmAsr.language("ru"), "ru");
+        assert_eq!(AsrModel::GlmAsr.language("pl"), "");
     }
 }
+

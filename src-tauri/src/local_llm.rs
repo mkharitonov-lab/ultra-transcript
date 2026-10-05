@@ -42,12 +42,13 @@ struct Loaded {
 
 static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
 
-fn backend() -> &'static LlamaBackend {
+pub(crate) fn backend() -> &'static LlamaBackend {
     static B: OnceLock<LlamaBackend> = OnceLock::new();
     B.get_or_init(|| {
-        let mut b = LlamaBackend::init().expect("llama.cpp backend");
+        let b = LlamaBackend::init().expect("llama.cpp backend");
         if std::env::var_os("UT_DEBUG").is_none() {
-            b.void_logs();
+            // Логи llama.cpp и mtmd (GLM-ASR) уходят в tracing, а его в приложении никто не слушает.
+            llama_cpp_2::send_logs_to_tracing(llama_cpp_2::LogOptions::default());
         }
         b
     })

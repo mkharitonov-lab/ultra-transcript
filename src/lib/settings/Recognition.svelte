@@ -15,7 +15,9 @@
   /** Все языки Parakeet. */
   const parakeet = ["ru", "en", "uk", "de", "fr", "es", "it", "pt", "pl", "bg", "cs", "da", "el", "et", "fi", "hr", "hu", "lt",
     "lv", "mt", "nl", "ro", "sk", "sl", "sv"];
-  const codes = $derived(s.asr_model === "parakeet" ? parakeet : whisper);
+  /** Языки GLM-ASR-Nano: язык подсказывается ей в инструкции, без него она иногда переводит речь на английский. */
+  const glm = ["ru", "en", "uk", "de", "fr", "es", "it", "pt", "nl", "ca", "zh", "ja", "ms", "id", "no", "lt", "sl"];
+  const codes = $derived(s.asr_model === "parakeet" ? parakeet : s.asr_model === "glm-asr" ? glm : whisper);
   const languages = $derived.by(() => {
     const names = new Intl.DisplayNames([i18n.lang], { type: "language" });
     return codes.map((code) => {
@@ -36,6 +38,7 @@
     { value: "gigaam", title: "GigaAM v3", model: model("gigaam") },
     { value: "whisper-turbo", title: "Whisper large-v3-turbo", model: model("whisper-turbo") },
     { value: "parakeet", title: "Parakeet TDT 0.6B v3", model: model("parakeet") },
+    { value: "glm-asr", title: "GLM-ASR-Nano", model: model("glm-asr") },
   ]} />
 </Group>
 

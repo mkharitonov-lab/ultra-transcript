@@ -4,6 +4,7 @@ pub mod audio;
 pub mod diar;
 pub mod docx;
 pub mod exchange;
+pub mod glm_asr;
 #[cfg(target_os = "macos")]
 mod hint;
 pub mod lang;

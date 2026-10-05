@@ -28,6 +28,7 @@ sherpa-onnx на GitHub, Hugging Face) — и хранится в папке д�
 | GigaAM v3 | Sber (SaluteDevices) | MIT | github.com/k2-fsa/sherpa-onnx (ONNX export), huggingface.co/ai-sage/GigaAM-v3 |
 | Whisper large-v3-turbo | OpenAI | MIT | github.com/k2-fsa/sherpa-onnx (ONNX export), github.com/openai/whisper |
 | Parakeet TDT 0.6B v3 | NVIDIA | CC BY 4.0 | github.com/k2-fsa/sherpa-onnx (ONNX export), huggingface.co/nvidia/parakeet-tdt-0.6b-v3 |
+| GLM-ASR-Nano-2512 | Zhipu AI | Apache 2.0 | huggingface.co/zai-org/GLM-ASR-Nano-2512, huggingface.co/concedo/GLM-ASR-Nano-2512-GGUF (GGUF) |
 | Silero VAD | Silero Team | MIT | github.com/snakers4/silero-vad |
 | pyannote segmentation 3.0 | pyannote (Hervé Bredin) | MIT | huggingface.co/pyannote/segmentation-3.0 |
 | WeSpeaker ResNet34-LM (VoxCeleb) | WeSpeaker | CC BY 4.0 | huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM |
