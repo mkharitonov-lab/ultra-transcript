@@ -3,7 +3,9 @@
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
 
-# llama.cpp (llama-cpp-sys-2) берёт статическую CRT не из crt-static, а из этой переменной.
-# На Mac и Linux она ни на что не влияет.
+# llama.cpp (llama-cpp-sys-2) берёт статическую CRT не из crt-static, а из LLAMA_STATIC_CRT. Этого мало:
+# CMake сам ставит динамическую (/MD) через CMAKE_MSVC_RUNTIME_LIBRARY, а переменные CMAKE_*
+# llama-cpp-sys-2 передаёт в CMake как есть. На Mac и Linux обе ни на что не влияют.
 [env]
 LLAMA_STATIC_CRT = "1"
+CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
